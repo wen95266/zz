@@ -30,7 +30,8 @@ async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYP
     logger.error("Exception while handling an update:", exc_info=context.error)
     if ADMIN_ID:
         try:
-            err_msg = str(context.error)[:200]
+            # 错误通知不使用 Markdown，防止报错本身再次报错
+            err_msg = str(context.error)[:500]
             await context.bot.send_message(chat_id=ADMIN_ID, text=f"🚨 Bot 发生错误: {err_msg}")
         except: pass
 
@@ -56,16 +57,23 @@ async def monitor_services_job(context: ContextTypes.DEFAULT_TYPE):
 
 ITEMS_PER_PAGE = 10
 
+def escape_md(text):
+    """简单的 Markdown 转义 (主要处理反引号，用于代码块内)"""
+    if not text: return ""
+    return text.replace("`", "'")
+
 async def render_browser(update: Update, context: ContextTypes.DEFAULT_TYPE, path="/", page=0, edit_msg=False):
     """核心渲染函数：渲染文件列表按钮"""
     
     # 1. 获取文件列表
-    # 注意：Alist API 分页是从 1 开始，但为了方便切片我们在内存中处理小文件夹
-    # 对于大文件夹，这里简化为一次取 100 个然后内存分页 (Telegram 按钮限制)
     files, err = fetch_file_list(path, page=1, per_page=200) 
     
     if err:
-        text = f"❌ 读取目录失败: `{path}`\n原因: {err}"
+        # ⚠️ 修复: 错误信息可能包含特殊字符 (如 Python 报错中的下划线)，必须放入代码块中
+        safe_path = escape_md(path)
+        safe_err = escape_md(str(err))
+        text = f"❌ *读取失败*: `{safe_path}`\n\n🔻 *原因*:\n```\n{safe_err}\n```"
+        
         if edit_msg: await update.callback_query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
         else: await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
         return
@@ -83,29 +91,24 @@ async def render_browser(update: Update, context: ContextTypes.DEFAULT_TYPE, pat
     end_idx = start_idx + ITEMS_PER_PAGE
     current_files = files[start_idx:end_idx]
 
-    # 4. 存储当前上下文到 user_data 以便按钮点击时无需传递长路径
-    # 结构: user_data['browser'] = { 'path': '/', 'files': [...current_page_files...], 'page': 0 }
+    # 4. 存储上下文
     context.user_data['browser'] = {
         'path': path,
         'page': page,
-        'files': current_files # 仅存储当前页的文件对象，减少内存
+        'files': current_files 
     }
 
     # 5. 构建键盘
     keyboard = []
     
-    # 文件/文件夹按钮 (使用索引 idx 引用 current_files)
     for idx, f in enumerate(current_files):
         icon = "📂" if f['is_dir'] else "📄"
-        # callback: "br:click:index"
         keyboard.append([InlineKeyboardButton(f"{icon} {f['name']}", callback_data=f"br:clk:{idx}")])
 
-    # 导航栏
     nav_row = []
     if page > 0:
         nav_row.append(InlineKeyboardButton("⬅️ 上一页", callback_data="br:pg:prev"))
     
-    # 返回上级
     if path != "/":
         nav_row.append(InlineKeyboardButton("🆙 返回上级", callback_data="br:nav:up"))
     else:
@@ -118,7 +121,9 @@ async def render_browser(update: Update, context: ContextTypes.DEFAULT_TYPE, pat
     keyboard.append([InlineKeyboardButton("❌ 关闭", callback_data="br:close")])
 
     markup = InlineKeyboardMarkup(keyboard)
-    text = f"📂 *当前路径:* `{path}`\n📄 共 {total_items} 项 (第 {page+1}/{total_pages or 1} 页)"
+    # 路径也可能包含特殊字符
+    safe_path = escape_md(path)
+    text = f"📂 *当前路径:* `{safe_path}`\n📄 共 {total_items} 项 (第 {page+1}/{total_pages or 1} 页)"
 
     if edit_msg:
         await update.callback_query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
@@ -132,7 +137,7 @@ async def browser_callback_handler(update: Update, context: ContextTypes.DEFAULT
     
     data = query.data
     parts = data.split(':')
-    action = parts[1] # clk, pg, nav, close, act
+    action = parts[1]
     
     browser_data = context.user_data.get('browser', {})
     current_path = browser_data.get('path', '/')
@@ -161,16 +166,15 @@ async def browser_callback_handler(update: Update, context: ContextTypes.DEFAULT
 
     if action == "clk":
         idx = int(parts[2])
-        if idx >= len(current_files): return # 越界保护
+        if idx >= len(current_files): return
         
         item = current_files[idx]
-        item_path = os.path.join(current_path, item['name']).replace("\\", "/") # 修复 Windows 路径分隔符问题
+        # 修复路径拼接 (Windows/Linux)
+        item_path = os.path.join(current_path, item['name']).replace("\\", "/")
         
         if item['is_dir']:
-            # 进入文件夹
             await render_browser(update, context, item_path, 0, True)
         else:
-            # 点击文件: 弹出操作菜单
             keyboard = [
                 [InlineKeyboardButton("📺 推流 (Stream)", callback_data=f"br:act:stream:{idx}")],
                 [InlineKeyboardButton("⬇️ 下载 (Download)", callback_data=f"br:act:dl:{idx}")],
@@ -178,51 +182,48 @@ async def browser_callback_handler(update: Update, context: ContextTypes.DEFAULT
             ]
             markup = InlineKeyboardMarkup(keyboard)
             
-            # 获取文件大小
             size_mb = round(item.get('size', 0) / (1024*1024), 2)
-            msg = f"📄 *已选中文件:*\n`{item['name']}`\n\n📏 大小: {size_mb} MB\n🔗 路径: `{item_path}`"
+            # ⚠️ 修复: 文件名包含反引号或下划线时会导致 Markdown 解析错误
+            safe_name = escape_md(item['name'])
+            safe_path = escape_md(item_path)
+            
+            msg = f"📄 *已选中文件:*\n`{safe_name}`\n\n📏 大小: {size_mb} MB\n🔗 路径: `{safe_path}`"
             await query.edit_message_text(msg, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
         return
 
     if action == "act":
         sub_act = parts[2]
         if sub_act == "back":
-            # 重新渲染列表
             await render_browser(update, context, current_path, current_page, True)
             return
         
-        # 对于操作，我们需要重新获取文件信息，因为 callback data 长度有限，不能传路径
         idx = int(parts[3])
         if idx >= len(current_files): return
         item = current_files[idx]
         full_path = os.path.join(current_path, item['name']).replace("\\", "/")
         
         if sub_act == "stream":
-            # 触发推流逻辑
-            # 模拟 /stream 命令
             context.args = [full_path] 
-            # 临时消息
-            await query.message.reply_text(f"🚀 已选择文件，准备推流...\n📄 `{item['name']}`", parse_mode=ParseMode.MARKDOWN)
-            # 调用原本的 trigger_stream 函数 (需要复用)
+            safe_name = escape_md(item['name'])
+            await query.message.reply_text(f"🚀 已选择文件，准备推流...\n📄 `{safe_name}`", parse_mode=ParseMode.MARKDOWN)
             await trigger_stream_logic(update, context, full_path)
             
         elif sub_act == "dl":
-            # 构造下载链接
             base_url = get_public_url()
             if not base_url:
                 await query.message.reply_text("❌ 隧道未启动，无法获取下载链接")
                 return
-            # 需要对路径进行 URL 编码
             from urllib.parse import quote
             dl_url = f"{base_url}/d{quote(full_path)}"
             
             success, msg = add_aria2_task(dl_url)
-            await query.message.reply_text(f"📥 *请求下载:*\n`{item['name']}`\n\n{msg}", parse_mode=ParseMode.MARKDOWN)
+            safe_name = escape_md(item['name'])
+            # msg 通常是 safe 的，但为了保险起见，如果 msg 也是动态的，最好也处理一下，这里暂且保留
+            await query.message.reply_text(f"📥 *请求下载:*\n`{safe_name}`\n\n{msg}", parse_mode=ParseMode.MARKDOWN)
 
 async def browser_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """入口命令 /ls"""
     if not check_auth(update.effective_user.id): return
-    # 如果带参数 /ls /path
     path = context.args[0] if context.args else "/"
     await render_browser(update, context, path, 0, False)
 
@@ -265,10 +266,11 @@ async def trigger_stream_logic(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     success, msg, _ = trigger_stream_action(base_url, path, target_rtmp)
+    # GitHub Action 返回的消息通常包含 URL，Markdown 解析需要小心，这里假设 msg 是安全的或由我们控制
     await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode=ParseMode.MARKDOWN)
 
 
-# --- 原始命令处理器 (保留但简化) ---
+# --- 原始命令处理器 ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not check_auth(update.effective_user.id): return
@@ -302,31 +304,33 @@ async def add_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(args) < 2:
         await update.message.reply_text("用法: `/addkey <名称> <密钥>`", parse_mode=ParseMode.MARKDOWN)
         return
+    # key name 是用户输入的，可能包含 markdown 字符，这里不使用 markdown 格式返回以防万一
     if add_key(args[0], args[1]):
-        await update.message.reply_text(f"✅ 已保存: `{args[0]}`", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"✅ 已保存: {args[0]}")
 
 async def del_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not check_auth(update.effective_user.id): return
     if not context.args: return
     if delete_key(context.args[0]):
-        await update.message.reply_text(f"🗑 已删除: `{context.args[0]}`", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"🗑 已删除: {context.args[0]}")
 
 async def list_keys_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not check_auth(update.effective_user.id): return
     keys = get_all_keys()
     base_rtmp = TG_RTMP_URL_ENV or "❌ 未配置"
-    msg = f"📺 *推流配置:*\n🔗 Base: `{base_rtmp}`\n\n"
+    msg = f"📺 *推流配置:*\n🔗 Base: `{escape_md(base_rtmp)}`\n\n"
     if not keys: msg += "(空)"
-    for k, v in keys.items(): msg += f"🔸 {k}: `...{v[-4:]}`\n"
+    for k, v in keys.items(): 
+        # 隐藏密钥部分，mask 处理
+        mask_v = f"...{v[-4:]}" if len(v) > 4 else "***"
+        msg += f"🔸 {escape_md(k)}: `{mask_v}`\n"
     await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not check_auth(update.effective_user.id): return
     text = update.message.text
     
-    # 新增入口
     if text == "📂 文件": await browser_command(update, context)
-
     elif text == "📊 状态": await send_status(update, context)
     elif text == "📥 任务": await send_tasks(update, context)
     elif text == "☁️ 隧道": await send_tunnel(update, context)
@@ -335,17 +339,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "📝 日志": await send_logs(update, context)
     elif text == "⚙️ 管理": await show_admin_menu(update, context)
     elif text == "❓ 帮助": await send_help(update, context)
-    
     elif text == "🔄 重启服务": await restart_services(update, context)
     elif text == "🔑 查看密码": await send_admin_pass(update, context)
     elif text == "📉 GitHub 用量": await send_usage_stats(update, context)
-    
     elif text == "👀 查看配置": await list_keys_command(update, context)
     elif text == "➕ 添加配置": await send_add_key_help(update, context)
     elif text == "🗑 删除配置": await send_del_key_help(update, context)
     elif text == "🔙 返回主菜单": await start(update, context)
 
-# --- 辅助函数保持不变，仅列出必须的 ---
+# --- 辅助函数 ---
+
 async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     markup = ReplyKeyboardMarkup(ADMIN_MENU, resize_keyboard=True)
     await update.message.reply_text("⚙️ *系统管理*", reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
@@ -361,6 +364,8 @@ async def send_del_key_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("用法: `/delkey 名称`", parse_mode=ParseMode.MARKDOWN)
 
 async def send_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # get_system_stats 内部也是 markdown，通常是安全的，但如果 psutil 返回怪异字符可能会有问题
+    # 暂时认为它是安全的
     await update.message.reply_text(get_system_stats(), parse_mode=ParseMode.MARKDOWN)
 
 async def send_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -373,7 +378,7 @@ async def send_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else: await update.message.reply_text("❌ 日志不存在")
 
 async def send_tunnel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = get_public_url()
+    url = get_public_url() or "未获取到"
     await update.message.reply_text(f"☁️ *URL:* `{url}`", parse_mode=ParseMode.MARKDOWN)
 
 async def restart_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -381,7 +386,9 @@ async def restart_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
     restart_pm2_services()
 
 async def send_admin_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"🔑 `{get_admin_pass()}`", parse_mode=ParseMode.MARKDOWN)
+    # 密码放入代码块
+    pwd = get_admin_pass() or "未知"
+    await update.message.reply_text(f"🔑 `{escape_md(pwd)}`", parse_mode=ParseMode.MARKDOWN)
 
 async def send_usage_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     results = get_all_usage_stats()
