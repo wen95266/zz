@@ -69,7 +69,7 @@ async def trigger_stream_logic(update: Update, context: ContextTypes.DEFAULT_TYP
 
     base_url = get_public_url()
     if not base_url:
-        await context.bot.send_message(chat_id=chat_id, text="❌ 隧道未就绪 (请检查 Cloudflared)")
+        await context.bot.send_message(chat_id=chat_id, text="❌ 隧道未就绪 (Cloudflared 正在启动或重连中，请稍后再试)")
         return
 
     # Radio 模式参数处理
@@ -89,7 +89,16 @@ async def trigger_stream_logic(update: Update, context: ContextTypes.DEFAULT_TYP
         }
         path = "Radio Mode" # 占位符
 
+    # 发送状态提示
+    status_msg = await context.bot.send_message(chat_id=chat_id, text="⏳ 正在请求 GitHub Action...")
+    
     success, msg, _ = trigger_stream_action(base_url, path, target_rtmp, extra_payload)
+    
+    # 删除状态提示，发送最终结果
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=status_msg.message_id)
+    except: pass
+    
     await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode=ParseMode.MARKDOWN)
 
 # --- 全局错误处理 ---
@@ -188,16 +197,19 @@ async def render_browser(update: Update, context: ContextTypes.DEFAULT_TYPE, pat
     except Exception as e:
         logger.error(f"Render browser error: {e}")
         err_text = f"❌ 渲染界面出错: {str(e)}"
-        if edit_msg:
-            await update.callback_query.edit_message_text(err_text)
-        else:
-            await update.message.reply_text(err_text)
+        try:
+            if edit_msg:
+                await update.callback_query.edit_message_text(err_text)
+            else:
+                await update.message.reply_text(err_text)
+        except: pass
 
 async def browser_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """处理浏览器按钮点击"""
     query = update.callback_query
     
     try:
+        # 1. 立即响应，消除转圈 (必须在所有逻辑之前)
         await query.answer()
         
         data = query.data
@@ -244,11 +256,10 @@ async def browser_callback_handler(update: Update, context: ContextTypes.DEFAULT
         if action == "clk":
             idx = int(parts[2])
             if idx >= len(current_files): 
-                await query.answer("文件索引失效，请刷新", show_alert=True)
+                await query.answer("文件列表已过期，请刷新", show_alert=True)
                 return
             
             item = current_files[idx]
-            item_path = os.path.join(current_path, item['name']).replace("\\", "/")
             safe_name = escape_md(item['name'])
             
             if item['is_dir']:
@@ -337,6 +348,8 @@ async def browser_callback_handler(update: Update, context: ContextTypes.DEFAULT
         logger.error(f"Callback error: {e}", exc_info=True)
         try:
             await query.answer("❌ 操作发生错误", show_alert=True)
+            # 尝试发送错误详情
+            await query.message.reply_text(f"❌ 错误: {str(e)[:100]}")
         except: pass
 
 async def browser_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -462,4 +475,4 @@ async def send_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def monitor_services_job(context: ContextTypes.DEFAULT_TYPE):
     # 简化的监控逻辑，防止阻塞
-    pass 
+    pass

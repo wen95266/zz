@@ -193,22 +193,19 @@ jobs:
         echo "📻 Starting Radio Stream..."
         
         # FFmpeg Command for Radio
-        # -f concat -safe 0 -i audio_list.txt: Read audio from remote URLs
-        # -f concat -safe 0 -i image_list.txt: Read images from local file
-        # -vf "scale=..." : Ensure 720p/1080p compatible
-        # -shortest : End stream when audio ends? Or loop audio?
-        # Let's loop the audio list infinitely? Adding -stream_loop -1 before -i audio.
-        # Note: concat demuxer + stream_loop can be tricky.
-        # Better: Rely on "while true" in bash if we want infinite, but GitHub limits time.
-        # We will just play the list once (or user can select many files).
+        # 1. -stream_loop -1: 让图片列表无限循环播放，确保视频流不会比音频流先结束
+        # 2. -shortest: 当音频流结束时停止推流 (否则会无限循环)
+        # 3. -max_muxing_queue_size 4096: 防止音视频处理速度不匹配导致队列溢出 (Exit 187 常见原因)
         
         ffmpeg -re \
-        -f concat -safe 0 -i image_list.txt \
+        -stream_loop -1 -f concat -safe 0 -i image_list.txt \
         -f concat -safe 0 -protocol_whitelist file,http,https,tcp,tls -i audio_list.txt \
         -map 0:v -map 1:a \
         -c:v libx264 -preset veryfast -tune stillimage \
         -vf "scale=1280:-2,setsar=1,format=yuv420p" -g 60 -keyint_min 60 \
         -c:a aac -b:a 192k -ar 44100 \
+        -max_muxing_queue_size 4096 \
+        -shortest \
         -f flv "$RTMP_URL"
 
     - name: Start Streaming (Standard Video Mode)
@@ -240,6 +237,7 @@ jobs:
         CMD+=(-crf 24 -maxrate 8000k -bufsize 16000k)
         CMD+=(-pix_fmt yuv420p -g 60)
         CMD+=(-c:a aac -ar 44100 -b:a 128k -ac 2)
+        CMD+=(-max_muxing_queue_size 4096)
         CMD+=(-f flv "$RTMP_URL")
 
         echo "▶️ 开始运行 FFmpeg (Standard)..."

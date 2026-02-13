@@ -1,6 +1,7 @@
 
 import requests
 import urllib.parse
+import re
 from .config import get_next_github_account, get_account_count, GITHUB_POOL
 from .alist_api import get_token, get_file_info
 
@@ -13,7 +14,7 @@ def trigger_stream_action(base_url, raw_path, target_rtmp_url, extra_payload=Non
     """
     触发 GitHub Actions 进行推流
     Args:
-        base_url: Alist 的公网地址
+        base_url: Alist 的公网地址 (Tunnel URL)
         raw_path: 视频文件路径 (标准模式用)
         target_rtmp_url: 目标 RTMP 推流地址
         extra_payload: 字典，Radio 模式下的额外参数
@@ -59,8 +60,16 @@ def trigger_stream_action(base_url, raw_path, target_rtmp_url, extra_payload=Non
                 raw_url = file_data["data"].get("raw_url", "")
                 if raw_url:
                     if raw_url.startswith("http"):
-                        video_url = raw_url
+                        # 🚨 关键检查: 如果 Alist 返回的是本地 IP (127.0.0.1/192.168/localhost)
+                        # 说明 Alist 没配置 Site URL。GitHub 无法访问本地 IP。
+                        # 此时必须强制回退到使用 base_url (Tunnel) 的手动构造模式。
+                        is_local = re.search(r'://(127\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.|192\.168\.|localhost)', raw_url)
+                        if not is_local:
+                             video_url = raw_url
+                        else:
+                             print(f"⚠️ 检测到本地链接 {raw_url}，将使用 Tunnel 回退方案")
                     else:
+                        # 相对路径，加上 Base URL (Tunnel)
                         video_url = f"{base_url}{raw_url}"
                         if alist_token:
                             sep = "&" if "?" in video_url else "?"
@@ -68,10 +77,13 @@ def trigger_stream_action(base_url, raw_path, target_rtmp_url, extra_payload=Non
         except Exception as e:
             print(f"获取文件信息失败: {e}")
 
-        # 2. 回退方案
+        # 2. 回退方案: 手动构造 /d 下载链接 (最稳妥，走 Tunnel)
         if not video_url:
             if not raw_path.startswith("/"): raw_path = "/" + raw_path
-            encoded_path = urllib.parse.quote(raw_path, safe='/')
+            # 使用 quote 编码路径，确保空格和中文正常
+            encoded_path = urllib.parse.quote(raw_path)
+            # 修正: Alist 的 /d 链接通常是 /d/path/to/file
+            # 注意: encoded_path 已经包含了开头的 /
             video_url = f"{base_url}/d{encoded_path}"
             if alist_token:
                 video_url += f"?token={alist_token}"
