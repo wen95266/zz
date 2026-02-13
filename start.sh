@@ -18,8 +18,8 @@ else
 fi
 
 echo "✅ 正在启动 PM2 服务组..."
-# 启动所有进程
-pm2 start ecosystem.config.js
+# 启动所有进程 (使用 .cjs 避免 ESM 模块错误)
+pm2 start ecosystem.config.cjs
 pm2 save
 
 echo "-----------------------------------"
