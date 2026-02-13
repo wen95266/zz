@@ -1,3 +1,4 @@
+
 import logging
 import asyncio
 import sys
@@ -5,7 +6,8 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 from .config import BOT_TOKEN, validate_config
 from .handlers import (
     start, trigger_stream, download_command, handle_message, 
-    send_usage_stats, global_error_handler, monitor_services_job
+    send_usage_stats, global_error_handler, monitor_services_job,
+    add_key_command, del_key_command, list_keys_command
 )
 
 # 配置日志到标准输出
@@ -28,7 +30,7 @@ if __name__ == '__main__':
     try:
         app = ApplicationBuilder().token(BOT_TOKEN).build()
         
-        # 1. 注册全局错误处理器 (关键: 捕获所有 Bot 内部异常)
+        # 1. 注册全局错误处理器
         app.add_error_handler(global_error_handler)
         
         # 2. 注册定时任务 (每 2 分钟检查一次服务状态)
@@ -40,6 +42,11 @@ if __name__ == '__main__':
         app.add_handler(CommandHandler("stream", trigger_stream))
         app.add_handler(CommandHandler("dl", download_command))
         app.add_handler(CommandHandler("usage", send_usage_stats))
+        
+        # 新增推流密钥管理命令
+        app.add_handler(CommandHandler("addkey", add_key_command))
+        app.add_handler(CommandHandler("delkey", del_key_command))
+        app.add_handler(CommandHandler("listkeys", list_keys_command))
         
         # 4. 注册消息处理器
         app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))

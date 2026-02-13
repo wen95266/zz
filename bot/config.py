@@ -1,3 +1,4 @@
+
 import os
 import itertools
 from dotenv import load_dotenv
@@ -10,8 +11,10 @@ load_dotenv(os.path.join(HOME, ".env"))
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
 
-# 推流配置
-TG_RTMP_URL = os.getenv("TG_RTMP_URL")
+# 推流基础地址 (Base URL)
+# 格式推荐: rtmp://hostname/app/
+# 实际推流地址 = TG_RTMP_URL_ENV + StreamKey
+TG_RTMP_URL_ENV = os.getenv("TG_RTMP_URL")
 
 # --- GitHub 多账号逻辑 ---
 _multi_accounts_str = os.getenv("GITHUB_ACCOUNTS_LIST", "")
@@ -47,7 +50,7 @@ HOME_DIR = HOME
 # 主菜单布局 (优化版)
 MAIN_MENU = [
     ["📊 状态", "📥 任务", "☁️ 隧道"],
-    ["⬇️ 下载", "📺 推流", "⚙️ 管理"],
+    ["⬇️ 下载", "📺 推流设置", "⚙️ 管理"],
     ["📝 日志", "❓ 帮助"]
 ]
 
@@ -55,6 +58,12 @@ MAIN_MENU = [
 ADMIN_MENU = [
     ["📉 GitHub 用量", "🔄 重启服务"],
     ["🔑 查看密码", "🔙 返回主菜单"]
+]
+
+# 推流设置子菜单
+STREAM_MENU = [
+    ["👀 查看配置", "➕ 添加配置"],
+    ["🗑 删除配置", "🔙 返回主菜单"]
 ]
 
 def validate_config():

@@ -1,19 +1,23 @@
+
 import requests
 import urllib.parse
-from .config import get_next_github_account, TG_RTMP_URL, get_account_count, GITHUB_POOL
+from .config import get_next_github_account, get_account_count, GITHUB_POOL
 
-def trigger_stream_action(base_url, raw_path):
+def trigger_stream_action(base_url, raw_path, target_rtmp_url):
     """
-    触发 GitHub Actions 进行推流 (支持多账号轮询)
-    返回: (success: bool, message: str, video_url: str)
+    触发 GitHub Actions 进行推流
+    Args:
+        base_url: Alist 的公网地址
+        raw_path: 视频文件路径
+        target_rtmp_url: 目标 RTMP 推流地址
     """
-    if not TG_RTMP_URL:
-        return False, "❌ 请在 `~/.env` 中配置 TG_RTMP_URL", ""
+    if not target_rtmp_url:
+        return False, "❌ 错误: 未提供 RTMP 推流地址", ""
 
     # 获取当前轮到的账号
     account = get_next_github_account()
     if not account:
-        return False, "❌ 未配置 GitHub 账号！请在 `~/.env` 设置 GITHUB_REPO/TOKEN 或 GITHUB_ACCOUNTS_LIST", ""
+        return False, "❌ 未配置 GitHub 账号！请在 `~/.env` 设置 GITHUB_ACCOUNTS_LIST", ""
 
     repo = account['repo']
     token = account['token']
@@ -34,7 +38,7 @@ def trigger_stream_action(base_url, raw_path):
         "event_type": "start_stream",
         "client_payload": {
             "video_url": video_url,
-            "rtmp_url": TG_RTMP_URL
+            "rtmp_url": target_rtmp_url
         }
     }
 
