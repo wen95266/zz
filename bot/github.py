@@ -57,9 +57,8 @@ def trigger_stream_action(base_url, raw_path, target_rtmp_url):
     try:
         r = requests.post(api_url, headers=headers, json=data, timeout=10)
         
-        # 简单遮罩
-        mask_repo = repo.split('/')[0] + "/..."
-        safe_repo = escape_text(mask_repo)
+        # 移除遮罩，显示完整仓库名
+        safe_repo = escape_text(repo)
 
         if r.status_code == 204:
             # 204 表示 GitHub 成功接收了请求
@@ -117,12 +116,12 @@ def get_single_usage(repo, token):
             limit = data.get("included_minutes", 2000)
             return True, {"used": used, "limit": limit}
         elif r.status_code == 403:
-            return False, "权限不足 (可能缺少 user scope)"
+            return False, "权限不足 (缺少 user 权限)"
         elif r.status_code == 404:
             # 细粒度 Token (Fine-grained) 不支持读取 Billing，或者是非 Admin 读取 Org
             return False, "无权读取账单 (404)"
         elif r.status_code == 410:
-            return False, "接口已废弃 (410)"
+            return False, "权限不足 (410: 请检查Token Scope)"
         else:
             return False, f"HTTP {r.status_code}"
     except Exception as e:
@@ -138,11 +137,9 @@ def get_all_usage_stats():
         repo = acc['repo']
         success, info = get_single_usage(repo, acc['token'])
         
-        # 简单遮罩处理
+        # 移除遮罩，直接显示完整用户名
         user = repo.split('/')[0]
-        # 使用 ... 替代 *** 防止 Markdown 解析混淆，并进行转义
-        mask_name = user[:3] + "..." if len(user) > 3 else user
-        safe_name = escape_text(mask_name)
+        safe_name = escape_text(user)
         
         if success:
             percent = 0
