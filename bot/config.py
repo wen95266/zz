@@ -44,6 +44,7 @@ if _account_count > 0:
 else:
     print("⚠️ 未配置 GitHub 推流账号 (GITHUB_ACCOUNTS_LIST 为空)")
 
+# 使用 itertools.cycle 实现无限轮询
 _account_cycle = itertools.cycle(GITHUB_POOL) if GITHUB_POOL else None
 
 def get_next_github_account():
@@ -62,17 +63,17 @@ ALIST_TOKEN = os.getenv("ALIST_TOKEN")
 
 HOME_DIR = HOME
 
-# 主菜单布局
+# ⚡️ 主菜单布局 (已精简)
 MAIN_MENU = [
     ["📂 文件", "📊 状态", "📥 任务"], 
-    ["⬇️ 下载", "☁️ 隧道", "⚙️ 管理"],
-    ["📺 推流设置", "📝 日志", "❓ 帮助"]
+    ["⬇️ 下载", "📺 推流设置", "⚙️ 管理"],
+    ["📝 日志", "❓ 帮助"]
 ]
 
-# 管理子菜单
+# ⚡️ 管理子菜单 (移除用量查询)
 ADMIN_MENU = [
-    ["📉 GitHub 用量", "🔄 重启服务"],
-    ["🔑 查看密码", "🔙 返回主菜单"]
+    ["🔄 重启服务", "🔑 查看密码"],
+    ["🔙 返回主菜单"]
 ]
 
 # 推流设置子菜单

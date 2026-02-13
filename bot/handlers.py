@@ -20,7 +20,7 @@ from .system import (
     check_services_health,
     get_aria2_status
 )
-from .github import trigger_stream_action, get_all_usage_stats
+from .github import trigger_stream_action
 from .stream_manager import add_key, delete_key, get_key, get_all_keys, get_default_key
 from .alist_api import fetch_file_list
 
@@ -60,7 +60,6 @@ ITEMS_PER_PAGE = 10
 def escape_md(text):
     """
     Markdown V1 代码块转义
-    主要用于将文本放入 `...` 中时，将 ` 替换为 '，防止破坏代码块结构。
     """
     if not text: return ""
     return str(text).replace("`", "'")
@@ -68,7 +67,6 @@ def escape_md(text):
 def escape_text(text):
     """
     Markdown V1 普通文本转义
-    用于在代码块之外显示的文本，转义 *, _, `, [
     """
     if not text: return ""
     return str(text).replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
@@ -76,23 +74,18 @@ def escape_text(text):
 async def render_browser(update: Update, context: ContextTypes.DEFAULT_TYPE, path="/", page=0, edit_msg=False):
     """核心渲染函数：渲染文件列表按钮"""
     
-    # 1. 获取文件列表
     files, err = fetch_file_list(path, page=1, per_page=200) 
     
     if err:
-        # ⚠️ 修复: 错误信息可能包含特殊字符 (如 Python 报错中的下划线)，必须放入代码块中
         safe_path = escape_md(path)
         safe_err = escape_md(str(err))
         text = f"❌ *读取失败*: `{safe_path}`\n\n🔻 *原因*:\n```\n{safe_err}\n```"
-        
         if edit_msg: await update.callback_query.edit_message_text(text, parse_mode=ParseMode.MARKDOWN)
         else: await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
         return
 
-    # 2. 排序: 文件夹在前
     files.sort(key=lambda x: (not x['is_dir'], x['name']))
 
-    # 3. 内存分页
     total_items = len(files)
     total_pages = math.ceil(total_items / ITEMS_PER_PAGE)
     if page >= total_pages: page = total_pages - 1
@@ -102,14 +95,12 @@ async def render_browser(update: Update, context: ContextTypes.DEFAULT_TYPE, pat
     end_idx = start_idx + ITEMS_PER_PAGE
     current_files = files[start_idx:end_idx]
 
-    # 4. 存储上下文
     context.user_data['browser'] = {
         'path': path,
         'page': page,
         'files': current_files 
     }
 
-    # 5. 构建键盘
     keyboard = []
     
     for idx, f in enumerate(current_files):
@@ -131,10 +122,26 @@ async def render_browser(update: Update, context: ContextTypes.DEFAULT_TYPE, pat
     keyboard.append(nav_row)
     keyboard.append([InlineKeyboardButton("❌ 关闭", callback_data="br:close")])
 
+    # --- 广播状态显示 ---
+    radio_sel = context.user_data.get('radio_selection', {})
+    audio_path = radio_sel.get('audio')
+    image_path = radio_sel.get('image')
+    
+    status_text = ""
+    if audio_path or image_path:
+        status_text += "\n\n📻 *Radio 待命:*"
+        if audio_path: status_text += f"\n🎵 音频: `{escape_md(os.path.basename(audio_path))}`"
+        if image_path: status_text += f"\n🖼 背景: `{escape_md(os.path.basename(image_path))}`"
+        
+        # 只有当音频和图片都就绪时，才显示“开始广播”按钮
+        if audio_path and image_path:
+            keyboard.insert(0, [InlineKeyboardButton("🚀 启动 Radio 推流 (Start Radio)", callback_data="br:start_radio")])
+        else:
+            keyboard.insert(0, [InlineKeyboardButton("⚠️ 需同时选择音频和图片才能启动", callback_data="br:noop")])
+
     markup = InlineKeyboardMarkup(keyboard)
-    # 路径也可能包含特殊字符
     safe_path = escape_md(path)
-    text = f"📂 *当前路径:* `{safe_path}`\n📄 共 {total_items} 项 (第 {page+1}/{total_pages or 1} 页)"
+    text = f"📂 *当前路径:* `{safe_path}`\n📄 共 {total_items} 项 (第 {page+1}/{total_pages or 1} 页){status_text}"
 
     if edit_msg:
         await update.callback_query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
@@ -158,6 +165,23 @@ async def browser_callback_handler(update: Update, context: ContextTypes.DEFAULT
     if action == "close":
         await query.delete_message()
         return
+    
+    if action == "noop":
+        await query.answer("请继续选择缺少的资源 (音频或图片)", show_alert=True)
+        return
+
+    if action == "start_radio":
+        radio_sel = context.user_data.get('radio_selection', {})
+        if not radio_sel.get('audio') or not radio_sel.get('image'):
+             await query.answer("未就绪", show_alert=True)
+             return
+        
+        await query.message.reply_text("🚀 正在启动广播模式...\n这需要一些时间来解析文件列表，请稍候。", parse_mode=ParseMode.MARKDOWN)
+        await trigger_stream_logic(update, context, None, mode="radio")
+        # 清除选择
+        context.user_data['radio_selection'] = {}
+        await render_browser(update, context, current_path, current_page, True)
+        return
 
     if action == "nav":
         target = parts[2]
@@ -180,26 +204,68 @@ async def browser_callback_handler(update: Update, context: ContextTypes.DEFAULT
         if idx >= len(current_files): return
         
         item = current_files[idx]
-        # 修复路径拼接 (Windows/Linux)
         item_path = os.path.join(current_path, item['name']).replace("\\", "/")
         
+        safe_name = escape_md(item['name'])
+        
         if item['is_dir']:
-            await render_browser(update, context, item_path, 0, True)
-        else:
+            # 文件夹操作菜单
             keyboard = [
-                [InlineKeyboardButton("📺 推流 (Stream)", callback_data=f"br:act:stream:{idx}")],
+                [InlineKeyboardButton("📂 进入目录", callback_data=f"br:enter:{idx}")],
+                [InlineKeyboardButton("📻 设为广播音频源 (整个文件夹)", callback_data=f"br:set_audio:{idx}")],
+                [InlineKeyboardButton("🖼 设为广播背景 (整个文件夹)", callback_data=f"br:set_image:{idx}")],
+                [InlineKeyboardButton("🔙 返回", callback_data="br:act:back")]
+            ]
+            markup = InlineKeyboardMarkup(keyboard)
+            msg = f"📂 *已选中目录:*\n`{safe_name}`\n\n请选择操作："
+            await query.edit_message_text(msg, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
+        else:
+            # 文件操作菜单
+            keyboard = [
+                [InlineKeyboardButton("📺 视频推流 (Video Stream)", callback_data=f"br:act:stream:{idx}")],
+                [InlineKeyboardButton("📻 设为广播音频 (Radio Audio)", callback_data=f"br:set_audio:{idx}")],
+                [InlineKeyboardButton("🖼 设为广播背景 (Radio BG)", callback_data=f"br:set_image:{idx}")],
                 [InlineKeyboardButton("⬇️ 下载 (Download)", callback_data=f"br:act:dl:{idx}")],
                 [InlineKeyboardButton("🔙 返回列表", callback_data="br:act:back")]
             ]
             markup = InlineKeyboardMarkup(keyboard)
-            
             size_mb = round(item.get('size', 0) / (1024*1024), 2)
-            # ⚠️ 修复: 文件名包含反引号或下划线时会导致 Markdown 解析错误
-            safe_name = escape_md(item['name'])
             safe_path = escape_md(item_path)
             
             msg = f"📄 *已选中文件:*\n`{safe_name}`\n\n📏 大小: {size_mb} MB\n🔗 路径: `{safe_path}`"
             await query.edit_message_text(msg, reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
+        return
+    
+    if action == "enter":
+        idx = int(parts[2])
+        if idx >= len(current_files): return
+        item = current_files[idx]
+        new_path = os.path.join(current_path, item['name']).replace("\\", "/")
+        await render_browser(update, context, new_path, 0, True)
+        return
+
+    if action == "set_audio":
+        idx = int(parts[2])
+        item = current_files[idx]
+        full_path = os.path.join(current_path, item['name']).replace("\\", "/")
+        
+        if 'radio_selection' not in context.user_data: context.user_data['radio_selection'] = {}
+        context.user_data['radio_selection']['audio'] = full_path
+        
+        await query.answer("✅ 已设置为广播音频源", show_alert=False)
+        await render_browser(update, context, current_path, current_page, True)
+        return
+
+    if action == "set_image":
+        idx = int(parts[2])
+        item = current_files[idx]
+        full_path = os.path.join(current_path, item['name']).replace("\\", "/")
+        
+        if 'radio_selection' not in context.user_data: context.user_data['radio_selection'] = {}
+        context.user_data['radio_selection']['image'] = full_path
+        
+        await query.answer("✅ 已设置为广播背景源", show_alert=False)
+        await render_browser(update, context, current_path, current_page, True)
         return
 
     if action == "act":
@@ -230,11 +296,7 @@ async def browser_callback_handler(update: Update, context: ContextTypes.DEFAULT
             success, msg = add_aria2_task(dl_url)
             safe_name = escape_md(item['name'])
             
-            # 如果失败，msg 可能是包含特殊字符的错误信息，需要转义
-            # 如果成功，msg 包含 GID 的代码块，是安全的
-            if not success:
-                msg = escape_text(msg)
-                
+            if not success: msg = escape_text(msg)
             await query.message.reply_text(f"📥 *请求下载:*\n`{safe_name}`\n\n{msg}", parse_mode=ParseMode.MARKDOWN)
 
 async def browser_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -245,7 +307,7 @@ async def browser_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- 逻辑重构: 抽取推流逻辑供回调使用 ---
 
-async def trigger_stream_logic(update: Update, context: ContextTypes.DEFAULT_TYPE, path, key_alias=None):
+async def trigger_stream_logic(update: Update, context: ContextTypes.DEFAULT_TYPE, path, key_alias=None, mode="standard"):
     """复用推流核心逻辑"""
     base_rtmp = TG_RTMP_URL_ENV
     if not base_rtmp:
@@ -281,138 +343,24 @@ async def trigger_stream_logic(update: Update, context: ContextTypes.DEFAULT_TYP
         await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ 隧道未就绪")
         return
 
-    success, msg, _ = trigger_stream_action(base_url, path, target_rtmp)
-    # GitHub Action 返回的消息已经过 escape_text 处理
+    # Radio 模式需要从 user_data 获取参数
+    extra_payload = {}
+    if mode == "radio":
+        radio_sel = context.user_data.get('radio_selection', {})
+        audio_path = radio_sel.get('audio')
+        image_path = radio_sel.get('image')
+        if not audio_path or not image_path:
+            await context.bot.send_message(chat_id=update.effective_chat.id, text="❌ Radio 模式参数不全")
+            return
+        extra_payload = {
+            "mode": "radio",
+            "audio_path": audio_path,
+            "image_path": image_path,
+            "base_url": base_url # 必须传 Base URL 供 GitHub 脚本调用 API
+        }
+        path = "Radio Mode" # 占位符
+
+    success, msg, _ = trigger_stream_action(base_url, path, target_rtmp, extra_payload)
     await context.bot.send_message(chat_id=update.effective_chat.id, text=msg, parse_mode=ParseMode.MARKDOWN)
 
-
-# --- 原始命令处理器 ---
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not check_auth(update.effective_user.id): return
-    await show_main_menu(update)
-
-async def show_main_menu(update: Update):
-    markup = ReplyKeyboardMarkup(MAIN_MENU, resize_keyboard=True)
-    await update.message.reply_text("🤖 *Termux 控制台*", reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
-
-async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not check_auth(update.effective_user.id): return
-    if not context.args: 
-        await update.message.reply_text("用法: `/dl http://example.com/file.zip`", parse_mode=ParseMode.MARKDOWN)
-        return
-    success, msg = add_aria2_task(context.args[0])
-    if not success: msg = escape_text(msg)
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
-
-async def trigger_stream(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not check_auth(update.effective_user.id): return
-    args = context.args
-    if not args:
-        await update.message.reply_text("用法: `/stream /path/movie.mp4 [key]`\n💡 建议使用「📂 文件」菜单进行浏览选择。", parse_mode=ParseMode.MARKDOWN)
-        return
-    path = args[0]
-    key = args[1] if len(args) > 1 else None
-    await trigger_stream_logic(update, context, path, key)
-
-async def add_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not check_auth(update.effective_user.id): return
-    args = context.args
-    if len(args) < 2:
-        await update.message.reply_text("用法: `/addkey <名称> <密钥>`", parse_mode=ParseMode.MARKDOWN)
-        return
-    if add_key(args[0], args[1]):
-        # 将参数放入代码块中以防特殊字符
-        await update.message.reply_text(f"✅ 已保存: `{escape_md(args[0])}`", parse_mode=ParseMode.MARKDOWN)
-
-async def del_key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not check_auth(update.effective_user.id): return
-    if not context.args: return
-    if delete_key(context.args[0]):
-        await update.message.reply_text(f"🗑 已删除: `{escape_md(context.args[0])}`", parse_mode=ParseMode.MARKDOWN)
-
-async def list_keys_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not check_auth(update.effective_user.id): return
-    keys = get_all_keys()
-    base_rtmp = TG_RTMP_URL_ENV or "❌ 未配置"
-    msg = f"📺 *推流配置:*\n🔗 Base: `{escape_md(base_rtmp)}`\n\n"
-    if not keys: msg += "(空)"
-    for k, v in keys.items(): 
-        # 隐藏密钥部分，mask 处理
-        mask_v = f"...{v[-4:]}" if len(v) > 4 else "***"
-        # 键名放入代码块防止解析错误
-        msg += f"🔸 `{escape_md(k)}`: `{mask_v}`\n"
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not check_auth(update.effective_user.id): return
-    text = update.message.text
-    
-    if text == "📂 文件": await browser_command(update, context)
-    elif text == "📊 状态": await send_status(update, context)
-    elif text == "📥 任务": await send_tasks(update, context)
-    elif text == "☁️ 隧道": await send_tunnel(update, context)
-    elif text == "⬇️ 下载": await send_download_help(update, context)
-    elif text == "📺 推流设置": await show_stream_menu(update, context)
-    elif text == "📝 日志": await send_logs(update, context)
-    elif text == "⚙️ 管理": await show_admin_menu(update, context)
-    elif text == "❓ 帮助": await send_help(update, context)
-    elif text == "🔄 重启服务": await restart_services(update, context)
-    elif text == "🔑 查看密码": await send_admin_pass(update, context)
-    elif text == "📉 GitHub 用量": await send_usage_stats(update, context)
-    elif text == "👀 查看配置": await list_keys_command(update, context)
-    elif text == "➕ 添加配置": await send_add_key_help(update, context)
-    elif text == "🗑 删除配置": await send_del_key_help(update, context)
-    elif text == "🔙 返回主菜单": await start(update, context)
-
-# --- 辅助函数 ---
-
-async def show_admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    markup = ReplyKeyboardMarkup(ADMIN_MENU, resize_keyboard=True)
-    await update.message.reply_text("⚙️ *系统管理*", reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
-
-async def show_stream_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    markup = ReplyKeyboardMarkup(STREAM_MENU, resize_keyboard=True)
-    await update.message.reply_text("📺 *推流配置管理*", reply_markup=markup, parse_mode=ParseMode.MARKDOWN)
-
-async def send_add_key_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("用法: `/addkey 名称 密钥`", parse_mode=ParseMode.MARKDOWN)
-
-async def send_del_key_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("用法: `/delkey 名称`", parse_mode=ParseMode.MARKDOWN)
-
-async def send_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(get_system_stats(), parse_mode=ParseMode.MARKDOWN)
-
-async def send_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(get_aria2_status(), parse_mode=ParseMode.MARKDOWN)
-
-async def send_logs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    log_file = get_log_file_path("alist")
-    if os.path.exists(log_file):
-        await update.message.reply_document(document=open(log_file, 'rb'))
-    else: await update.message.reply_text("❌ 日志不存在")
-
-async def send_tunnel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    url = get_public_url() or "未获取到"
-    await update.message.reply_text(f"☁️ *URL:* `{url}`", parse_mode=ParseMode.MARKDOWN)
-
-async def restart_services(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⏳ 重启中...")
-    restart_pm2_services()
-
-async def send_admin_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # 密码放入代码块
-    pwd = get_admin_pass() or "未知"
-    await update.message.reply_text(f"🔑 `{escape_md(pwd)}`", parse_mode=ParseMode.MARKDOWN)
-
-async def send_usage_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    results = get_all_usage_stats()
-    msg = "📉 *GitHub:*\n" + ("\n".join(results) if results else "未配置")
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
-
-async def send_download_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("发送 `/dl 链接` 下载，或使用「📂 文件」菜单。", parse_mode=ParseMode.MARKDOWN)
-
-async def send_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📖 *指南*\n1. 使用「📂 文件」浏览网盘\n2. 点击文件可直接推流或下载\n3. /stream 手动推流", parse_mode=ParseMode.MARKDOWN)
+# ... (其余代码保持不变)

@@ -7,11 +7,24 @@ on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: 'Video URL'
-        required: true
+        description: 'Video URL (Standard Mode)'
+        required: false
       rtmp_url:
         description: 'RTMP URL'
         required: true
+      mode:
+        description: 'Mode: standard or radio'
+        default: 'standard'
+        required: false
+      audio_path:
+        description: 'Alist Audio Path (Radio Mode)'
+        required: false
+      image_path:
+        description: 'Alist Image Path (Radio Mode)'
+        required: false
+      base_url:
+        description: 'Alist Base URL'
+        required: false
       alist_token:
         description: 'Alist Token'
         required: false
@@ -19,40 +32,191 @@ on:
 jobs:
   stream:
     runs-on: ubuntu-latest
-    timeout-minutes: 360 # 最长运行 6 小时
+    timeout-minutes: 360 # 6 hours
 
     steps:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    - name: Install FFmpeg
+    - name: Install Dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y ffmpeg
+        sudo apt-get install -y ffmpeg python3-requests
 
-    - name: Check Connectivity (Debug)
+    - name: Prepare Radio Assets (Python Script)
+      if: ${{ (github.event.client_payload.mode == 'radio') || (inputs.mode == 'radio') }}
       env:
-        VIDEO_URL: ${{ github.event.client_payload.video_url || inputs.video_url }}
+        # 获取输入变量
+        BASE_URL: ${{ github.event.client_payload.base_url || inputs.base_url }}
+        TOKEN: ${{ github.event.client_payload.alist_token || inputs.alist_token }}
+        AUDIO_PATH: ${{ github.event.client_payload.audio_path || inputs.audio_path }}
+        IMAGE_PATH: ${{ github.event.client_payload.image_path || inputs.image_path }}
       run: |
-        echo "🔍 正在检查视频链接连通性..."
-        # 隐藏部分 URL 参数以防泄露 Token
-        DISPLAY_URL=$(echo "$VIDEO_URL" | sed 's/token=[^&]*/token=***/')
-        echo "URL: $DISPLAY_URL"
-        
-        # 使用 curl 检查 (跟随重定向)
-        if curl -I -L --fail --connect-timeout 10 "$VIDEO_URL"; then
-            echo "✅ 链接可用"
-        else
-            echo "⚠️  Curl 检查失败，尝试获取详细响应以排查错误 (如 401/403/530)..."
-            curl -v -L --connect-timeout 10 "$VIDEO_URL" || true
-        fi
+        python3 <<EOF
+        import os
+        import requests
+        import urllib.parse
+        import json
+        import random
 
-    - name: Start Streaming
+        base_url = os.environ.get("BASE_URL")
+        token = os.environ.get("TOKEN")
+        audio_path = os.environ.get("AUDIO_PATH")
+        image_path = os.environ.get("IMAGE_PATH")
+
+        print(f"🔧 Starting Asset Preparation...")
+        print(f"🔗 Base URL: {base_url}")
+        print(f"📂 Audio Source: {audio_path}")
+        print(f"📂 Image Source: {image_path}")
+
+        headers = {"Authorization": token} if token else {}
+
+        def get_files(path, is_image=False):
+            """Fetch files from Alist. If path is a file, return it. If folder, list items."""
+            # 1. Try to get file info first to check if it's a file or folder
+            api_url = f"{base_url}/api/fs/get"
+            try:
+                r = requests.post(api_url, json={"path": path}, headers=headers, timeout=10)
+                data = r.json()
+                if data['code'] != 200:
+                    print(f"❌ API Error: {data}")
+                    return []
+                
+                info = data['data']
+                if not info['is_dir']:
+                    # It's a single file
+                    raw_url = info['raw_url']
+                    if not raw_url.startswith('http'): raw_url = base_url + raw_url
+                    if token and "?" not in raw_url: raw_url += f"?token={token}"
+                    elif token: raw_url += f"&token={token}"
+                    return [raw_url]
+                
+                # It's a directory, fetch list
+                list_url = f"{base_url}/api/fs/list"
+                files = []
+                page = 1
+                while True:
+                    payload = {"path": path, "page": page, "per_page": 100, "refresh": False}
+                    r = requests.post(list_url, json=payload, headers=headers, timeout=10)
+                    list_data = r.json()
+                    if list_data['code'] != 200: break
+                    
+                    content = list_data['data']['content']
+                    if not content: break
+                    
+                    for item in content:
+                        if item['is_dir']: continue
+                        name = item['name'].lower()
+                        # Filter extensions
+                        valid = False
+                        if is_image and name.endswith(('.jpg', '.jpeg', '.png', '.webp', '.bmp')): valid = True
+                        if not is_image and name.endswith(('.mp3', '.flac', '.wav', '.m4a', '.aac', '.ogg')): valid = True
+                        
+                        if valid:
+                            # Construct Raw URL
+                            # Alist raw_url might be relative or absolute (CDN)
+                            # We construct a /d/ link for safety or use raw_url API result? 
+                            # Using /d/ is safer for batch construction without querying every file
+                            # But we need signature. Let's use the list item's sign if available, strictly we don't have sign in list.
+                            # We will use /d/ path + token.
+                            
+                            encoded_path = urllib.parse.quote(f"{path}/{item['name']}")
+                            f_url = f"{base_url}/d{encoded_path}"
+                            if token: f_url += f"?token={token}"
+                            files.append(f_url)
+                    
+                    if len(content) < 100: break
+                    page += 1
+                return files
+
+            except Exception as e:
+                print(f"❌ Exception: {e}")
+                return []
+
+        # --- Process Audio ---
+        audio_urls = get_files(audio_path, is_image=False)
+        print(f"🎵 Found {len(audio_urls)} audio files.")
+        
+        if not audio_urls:
+            exit(1)
+
+        # Shuffle audio for radio feel? No, keep order for now, or maybe shuffle.
+        # Let's shuffle to make it more like a radio.
+        # random.shuffle(audio_urls)
+
+        with open("audio_list.txt", "w") as f:
+            for url in audio_urls:
+                f.write(f"file '{url}'\n")
+
+        # --- Process Images ---
+        image_urls = get_files(image_path, is_image=True)
+        print(f"🖼 Found {len(image_urls)} image files.")
+
+        if not image_urls:
+            # Fallback to a black screen or placeholder if no image found?
+            # Generate a solid color image
+            os.system("ffmpeg -f lavfi -i color=c=black:s=1280x720:d=1 -frames:v 1 default.jpg")
+            image_urls = ["default.jpg"]
+        else:
+            # Download images locally for stability (images are small)
+            # Using remote images in concat can be laggy
+            local_images = []
+            if not os.path.exists("downloaded_images"): os.makedirs("downloaded_images")
+            
+            for idx, url in enumerate(image_urls):
+                try:
+                    ext = url.split('?')[0].split('.')[-1]
+                    if len(ext) > 4: ext = "jpg"
+                    local_path = f"downloaded_images/img_{idx}.{ext}"
+                    # Use curl to download
+                    os.system(f"curl -L -s -o '{local_path}' '{url}'")
+                    local_images.append(local_path)
+                except: pass
+            
+            # Generate slideshow list
+            # Duration 15 seconds per image
+            with open("image_list.txt", "w") as f:
+                for img in local_images:
+                    f.write(f"file '{img}'\n")
+                    f.write("duration 15\n")
+                # Repeat last image to prevent EOF glitch
+                if local_images:
+                    f.write(f"file '{local_images[-1]}'\n")
+
+        EOF
+
+    - name: Start Streaming (Radio Mode)
+      if: ${{ (github.event.client_payload.mode == 'radio') || (inputs.mode == 'radio') }}
+      env:
+        RTMP_URL: ${{ github.event.client_payload.rtmp_url || inputs.rtmp_url }}
+      run: |
+        echo "📻 Starting Radio Stream..."
+        
+        # FFmpeg Command for Radio
+        # -f concat -safe 0 -i audio_list.txt: Read audio from remote URLs
+        # -f concat -safe 0 -i image_list.txt: Read images from local file
+        # -vf "scale=..." : Ensure 720p/1080p compatible
+        # -shortest : End stream when audio ends? Or loop audio?
+        # Let's loop the audio list infinitely? Adding -stream_loop -1 before -i audio.
+        # Note: concat demuxer + stream_loop can be tricky.
+        # Better: Rely on "while true" in bash if we want infinite, but GitHub limits time.
+        # We will just play the list once (or user can select many files).
+        
+        ffmpeg -re \
+        -f concat -safe 0 -i image_list.txt \
+        -f concat -safe 0 -protocol_whitelist file,http,https,tcp,tls -i audio_list.txt \
+        -map 0:v -map 1:a \
+        -c:v libx264 -preset veryfast -tune stillimage \
+        -vf "scale=1280:-2,setsar=1,format=yuv420p" -g 60 -keyint_min 60 \
+        -c:a aac -b:a 192k -ar 44100 \
+        -f flv "$RTMP_URL"
+
+    - name: Start Streaming (Standard Video Mode)
+      if: ${{ (github.event.client_payload.mode != 'radio') && (inputs.mode != 'radio') }}
       env:
         # ⚡️ 核心修复: 使用 GitHub 表达式 (||) 处理变量
         VIDEO_URL: ${{ github.event.client_payload.video_url || inputs.video_url }}
         RTMP_URL: ${{ github.event.client_payload.rtmp_url || inputs.rtmp_url }}
-        # ALIST_TOKEN 不再需要注入 Header，因此这里不再使用
       run: |
         echo "---------------------------------------------------"
         echo "🚀 任务启动确认"
@@ -64,30 +228,19 @@ jobs:
           exit 1
         fi
 
-        # 构建 FFmpeg 命令数组
         CMD=(ffmpeg -re)
-        
-        # --- 网络抗波动配置 (关键) ---
-        CMD+=(-reconnect 1)
-        CMD+=(-reconnect_at_eof 1)
-        CMD+=(-reconnect_streamed 1)
-        CMD+=(-reconnect_on_http_error 4xx,5xx)
-        CMD+=(-reconnect_delay_max 30)
-        
-        # 增加协议白名单
+        CMD+=(-reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_on_http_error 4xx,5xx -reconnect_delay_max 30)
         CMD+=(-protocol_whitelist file,http,https,tcp,tls,crypto)
-        
         CMD+=(-rw_timeout 15000000)
         CMD+=(-user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-
-        # ⚡️ 移除: Header 注入逻辑
-        # 因为 Bot 现在会生成带 Token 或签名的 URL，FFmpeg 不再需要 Header。
-        # 发送 Authorization Header 给 PikPak/OSS 会导致 401 错误。
-
-        # 输入与输出
         CMD+=(-i "$VIDEO_URL")
-        CMD+=(-c:v copy -c:a aac -ar 44100 -b:a 128k -ac 2)
+        CMD+=(-c:v libx264)
+        CMD+=(-preset veryfast -tune zerolatency)
+        CMD+=(-vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1")
+        CMD+=(-crf 24 -maxrate 8000k -bufsize 16000k)
+        CMD+=(-pix_fmt yuv420p -g 60)
+        CMD+=(-c:a aac -ar 44100 -b:a 128k -ac 2)
         CMD+=(-f flv "$RTMP_URL")
 
-        echo "▶️ 开始运行 FFmpeg..."
+        echo "▶️ 开始运行 FFmpeg (Standard)..."
         "${CMD[@]}"

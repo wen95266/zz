@@ -9,13 +9,14 @@ def escape_text(text):
     if not text: return ""
     return str(text).replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
 
-def trigger_stream_action(base_url, raw_path, target_rtmp_url):
+def trigger_stream_action(base_url, raw_path, target_rtmp_url, extra_payload=None):
     """
     触发 GitHub Actions 进行推流
     Args:
         base_url: Alist 的公网地址
-        raw_path: 视频文件路径
+        raw_path: 视频文件路径 (标准模式用)
         target_rtmp_url: 目标 RTMP 推流地址
+        extra_payload: 字典，Radio 模式下的额外参数
     """
     if not target_rtmp_url:
         return False, "❌ 错误: 未提供 RTMP 推流地址", ""
@@ -31,45 +32,54 @@ def trigger_stream_action(base_url, raw_path, target_rtmp_url):
 
     # 获取 Alist Token
     alist_token = get_token() or ""
-
-    # -------------------------------------------------
-    # ⚡️ 核心修复: 获取真实直链或带签名的链接
-    # -------------------------------------------------
     video_url = ""
     
-    try:
-        # 1. 尝试通过 API 获取真实直链 (Raw URL)
-        # 这对于 PikPak/阿里云盘等非常重要，因为它们返回的是签名的 CDN 链接
-        # 如果直接用 /d/ 链接并配合 Header，重定向后 Header 会导致云厂商 401/403 错误
-        file_data = get_file_info(raw_path)
-        
-        if file_data and file_data.get("code") == 200:
-            raw_url = file_data["data"].get("raw_url", "")
-            if raw_url:
-                if raw_url.startswith("http"):
-                    # 这是一个远程直链 (如 PikPak CDN)，直接使用，不需要 Token
-                    video_url = raw_url
-                else:
-                    # 这是一个本地相对路径，拼接 Base URL
-                    video_url = f"{base_url}{raw_url}"
-                    # 本地文件通常需要鉴权，将 Token 放入 URL 参数中最安全
-                    if alist_token:
-                        sep = "&" if "?" in video_url else "?"
-                        video_url += f"{sep}token={alist_token}"
-    except Exception as e:
-        print(f"获取文件信息失败: {e}")
+    # 构造 Payload
+    client_payload = {
+        "rtmp_url": target_rtmp_url,
+        "alist_token": alist_token # 无论何种模式，都传递 Token 以备不时之需
+    }
 
-    # 2. 如果 API 获取失败，回退到构造 /d/ 链接 (并使用 Token URL 参数)
-    if not video_url:
-        # 路径处理与 URL 编码
-        if not raw_path.startswith("/"): raw_path = "/" + raw_path
-        encoded_path = urllib.parse.quote(raw_path, safe='/')
-        video_url = f"{base_url}/d{encoded_path}"
-        # 显式追加 Token 参数
-        if alist_token:
-            video_url += f"?token={alist_token}"
-    
-    print(f"📺 推流链接已生成: {video_url}")
+    # 处理模式差异
+    if extra_payload and extra_payload.get("mode") == "radio":
+        # Radio 模式
+        client_payload.update(extra_payload)
+        client_payload["video_url"] = "radio_placeholder" # 避免 Workflow 报错
+        
+        display_msg = "📻 *Radio 推流任务*\n"
+        display_msg += f"🎵 音频源: `{escape_text(extra_payload.get('audio_path'))}`\n"
+        display_msg += f"🖼 背景源: `{escape_text(extra_payload.get('image_path'))}`"
+        
+    else:
+        # 标准视频模式
+        try:
+            # 1. 尝试通过 API 获取真实直链
+            file_data = get_file_info(raw_path)
+            if file_data and file_data.get("code") == 200:
+                raw_url = file_data["data"].get("raw_url", "")
+                if raw_url:
+                    if raw_url.startswith("http"):
+                        video_url = raw_url
+                    else:
+                        video_url = f"{base_url}{raw_url}"
+                        if alist_token:
+                            sep = "&" if "?" in video_url else "?"
+                            video_url += f"{sep}token={alist_token}"
+        except Exception as e:
+            print(f"获取文件信息失败: {e}")
+
+        # 2. 回退方案
+        if not video_url:
+            if not raw_path.startswith("/"): raw_path = "/" + raw_path
+            encoded_path = urllib.parse.quote(raw_path, safe='/')
+            video_url = f"{base_url}/d{encoded_path}"
+            if alist_token:
+                video_url += f"?token={alist_token}"
+        
+        client_payload["video_url"] = video_url
+        client_payload["mode"] = "standard"
+        
+        display_msg = f"📺 *视频推流任务*\n📄 文件: `{escape_text(raw_path)}`"
 
     # GitHub API 请求
     api_url = f"https://api.github.com/repos/{repo}/dispatches"
@@ -79,27 +89,17 @@ def trigger_stream_action(base_url, raw_path, target_rtmp_url):
     }
     data = {
         "event_type": "start_stream",
-        "client_payload": {
-            "video_url": video_url,
-            "rtmp_url": target_rtmp_url,
-            # Token 已整合进 URL，无需单独传递，但保留字段以防万一
-            "alist_token": "" 
-        }
+        "client_payload": client_payload
     }
 
     try:
         r = requests.post(api_url, headers=headers, json=data, timeout=10)
-        
-        # 移除遮罩，显示完整仓库名
         safe_repo = escape_text(repo)
 
         if r.status_code == 204:
-            # 204 表示 GitHub 成功接收了请求
             msg = f"✅ *指令已发送* (账号池: {pool_size})\n"
             msg += f"👤 仓库: `{safe_repo}`\n\n"
-            msg += "⚠️ *如果直播没开始:*\n"
-            msg += "请检查你的 GitHub 仓库中是否存在 `.github/workflows/stream.yml` 文件。\n"
-            msg += "👉 *Bot 只是发送指令，实际推流由 GitHub 运行你仓库里的文件。*"
+            msg += display_msg
             return True, msg, video_url
         elif r.status_code == 404:
             return False, f"❌ 找不到仓库 `{safe_repo}` (404)\n可能原因: 仓库名填错 / Token 权限不足 / 仓库是私有的", video_url
@@ -109,80 +109,3 @@ def trigger_stream_action(base_url, raw_path, target_rtmp_url):
             return False, f"❌ GitHub 拒绝: {r.status_code}\n{escape_text(r.text)}", video_url
     except Exception as e:
         return False, f"❌ 网络请求失败: {escape_text(str(e))}", video_url
-
-def get_single_usage(repo, token):
-    """查询单个账号的额度使用情况"""
-    try:
-        # 从 repo (username/repo) 提取 owner (可能是 User 也可能是 Org)
-        owner = repo.split('/')[0]
-        headers = {
-            "Authorization": f"token {token}",
-            "Accept": "application/vnd.github.v3+json"
-        }
-
-        # 1. 检查账号类型 (User vs Organization)
-        type_url = f"https://api.github.com/users/{owner}"
-        r_type = requests.get(type_url, headers=headers, timeout=5)
-
-        if r_type.status_code == 401:
-             return False, "Token 无效 (401)"
-        elif r_type.status_code == 404:
-             return False, "用户/组织不存在 (404)"
-        elif r_type.status_code != 200:
-             return False, f"API 错误 {r_type.status_code}"
-
-        account_type = r_type.json().get("type", "User")
-
-        # 2. 根据类型选择 Billing API 接口
-        if account_type == "Organization":
-            url = f"https://api.github.com/orgs/{owner}/settings/billing/actions"
-        else:
-            url = f"https://api.github.com/users/{owner}/settings/billing/actions"
-            
-        r = requests.get(url, headers=headers, timeout=5)
-        
-        if r.status_code == 200:
-            data = r.json()
-            used = data.get("total_minutes_used", 0)
-            limit = data.get("included_minutes", 2000)
-            return True, {"used": used, "limit": limit}
-        elif r.status_code == 403:
-            return False, "权限不足 (缺少 user 权限)"
-        elif r.status_code == 404 or r.status_code == 410:
-            return True, {"used": 0, "limit": -1}
-        else:
-            return False, f"HTTP {r.status_code}"
-    except Exception as e:
-        return False, str(e)
-
-def get_all_usage_stats():
-    """获取所有配置账号的统计信息"""
-    results = []
-    if not GITHUB_POOL:
-        return []
-
-    for acc in GITHUB_POOL:
-        repo = acc['repo']
-        success, info = get_single_usage(repo, acc['token'])
-        
-        user = repo.split('/')[0]
-        safe_name = escape_text(user)
-        
-        if success:
-            if info.get('limit') == -1:
-                results.append(f"🟢 *{safe_name}*: `额度未知` (API受限)")
-            else:
-                percent = 0
-                if info['limit'] > 0:
-                    percent = round((info['used'] / info['limit']) * 100, 1)
-                
-                icon = "🟢"
-                if percent > 80: icon = "🟡"
-                if percent > 95: icon = "🔴"
-                
-                results.append(f"{icon} *{safe_name}*: `{info['used']}` / `{info['limit']}` ({percent}%)")
-        else:
-            safe_info = escape_text(info)
-            results.append(f"⚪ *{safe_name}*: ⚠️ {safe_info}")
-            
-    return results
