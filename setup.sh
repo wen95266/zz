@@ -98,29 +98,68 @@ pm2 stop alist >/dev/null 2>&1 || true
 
 echo "⚙️ 配置 Alist..."
 
-# 检查 pkg 是否成功安装 alist
-if command -v alist &> /dev/null; then
-    SYSTEM_ALIST=$(command -v alist)
-    echo "✅ 检测到系统内置 Alist: $SYSTEM_ALIST"
+# 1. 优先检测 Termux 系统路径下的 Alist ($PREFIX/bin/alist)
+# 避免因为 ~/bin 在 PATH 前面而检测到错误的/损坏的旧文件
+TERMUX_ALIST_PATH="$PREFIX/bin/alist"
+
+if [ -f "$TERMUX_ALIST_PATH" ]; then
+    echo "✅ 检测到系统内置 Alist: $TERMUX_ALIST_PATH"
     
-    # 建立软链接，确保兼容 start.sh 和 generate-config.js
+    # 删除旧的 ~/bin/alist (无论是文件还是软链接)
     rm -f "$ALIST_BIN"
-    ln -sf "$SYSTEM_ALIST" "$ALIST_BIN"
     
-    echo "🔗 已创建链接: ~/bin/alist -> $SYSTEM_ALIST"
+    # 建立软链接
+    ln -sf "$TERMUX_ALIST_PATH" "$ALIST_BIN"
+    echo "🔗 已更新链接: ~/bin/alist -> $TERMUX_ALIST_PATH"
+
+elif command -v alist &> /dev/null; then
+    # 兜底: 如果不在标准路径，但 command -v 能找到
+    SYSTEM_ALIST=$(command -v alist)
     
-    # 验证版本
-    echo "🧪 验证 Alist 运行..."
-    if "$ALIST_BIN" version > /dev/null 2>&1; then
-        echo "✅ Alist 运行正常！"
+    # 防止循环链接 (例如 command -v 返回的是 ~/bin/alist)
+    if [ "$SYSTEM_ALIST" == "$ALIST_BIN" ]; then
+        echo "⚠️  检测到 Alist 路径指向自身，尝试强制重装..."
+        pkg reinstall -y alist
+        # 重装后再次检查标准路径
+        if [ -f "$TERMUX_ALIST_PATH" ]; then
+             rm -f "$ALIST_BIN"
+             ln -sf "$TERMUX_ALIST_PATH" "$ALIST_BIN"
+        else
+             echo "❌ 重装失败，请尝试手动运行: pkg install alist"
+             exit 1
+        fi
     else
-        echo "⚠️  Alist 运行失败，请检查 pkg 安装。"
-        exit 1
+        echo "✅ 检测到 Alist (非标准路径): $SYSTEM_ALIST"
+        rm -f "$ALIST_BIN"
+        ln -sf "$SYSTEM_ALIST" "$ALIST_BIN"
     fi
 else
-    echo "❌ 错误: 未找到 alist 命令。"
-    echo "尝试手动安装: pkg install alist"
-    exit 1
+    echo "⚠️  未检测到 Alist，正在尝试安装..."
+    pkg install -y alist
+    
+    if [ -f "$TERMUX_ALIST_PATH" ]; then
+        rm -f "$ALIST_BIN"
+        ln -sf "$TERMUX_ALIST_PATH" "$ALIST_BIN"
+    else
+        echo "❌ 错误: Alist 安装失败。"
+        exit 1
+    fi
+fi
+
+# 验证版本
+echo "🧪 验证 Alist 运行..."
+if "$ALIST_BIN" version > /dev/null 2>&1; then
+    echo "✅ Alist 运行正常！"
+else
+    echo "⚠️  Alist 运行失败，文件可能损坏。"
+    echo "尝试清理并重装..."
+    pkg reinstall -y alist
+    if "$ALIST_BIN" version > /dev/null 2>&1; then
+        echo "✅ Alist 修复成功！"
+    else
+        echo "❌ Alist 仍然无法运行，请检查 Termux 环境。"
+        exit 1
+    fi
 fi
 
 # --- 3. 生成配置文件 ---
