@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Termux Alist Bot
 
 专为 **Android Termux** 打造的轻量级网盘与下载机器人。
@@ -52,16 +51,3 @@
 *   `~/downloads/`: 默认下载目录
 *   `~/.pm2/logs/`: 日志文件
 
-=======
-<div align="center">
-
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-
-  <h1>Built with AI Studio</h2>
-
-  <p>The fastest path from prompt to production with Gemini.</p>
-
-  <a href="https://aistudio.google.com/apps">Start building</a>
-
-</div>
->>>>>>> 51e42e96d6042965111f47b201f919842d6ba31c
