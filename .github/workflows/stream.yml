@@ -2,11 +2,8 @@
 name: Telegram Live Stream
 
 on:
-  # 1. 允许 Bot 通过 API 触发
   repository_dispatch:
     types: [start_stream]
-  
-  # 2. 允许在 GitHub 网页手动点击 "Run workflow" (用于测试文件是否有效)
   workflow_dispatch:
     inputs:
       video_url:
@@ -16,7 +13,7 @@ on:
         description: 'RTMP URL'
         required: true
       alist_token:
-        description: 'Alist Token (Optional)'
+        description: 'Alist Token'
         required: false
 
 jobs:
@@ -34,60 +31,43 @@ jobs:
         sudo apt-get install -y ffmpeg
 
     - name: Start Streaming
+      env:
+        # ⚡️ 核心修复: 使用 GitHub 表达式 (||) 处理变量
+        # 如果是 Bot 触发 (client_payload)，则使用前者
+        # 如果是 手动触发 (inputs)，则使用后者
+        VIDEO_URL: ${{ github.event.client_payload.video_url || inputs.video_url }}
+        RTMP_URL: ${{ github.event.client_payload.rtmp_url || inputs.rtmp_url }}
+        ALIST_TOKEN: ${{ github.event.client_payload.alist_token || inputs.alist_token }}
       run: |
-        # --- 1. 参数解析 ---
-        if [ "${{ github.event_name }}" == "repository_dispatch" ]; then
-          # 来自 Bot API 的参数
-          VIDEO="${{ github.event.client_payload.video_url }}"
-          RTMP="${{ github.event.client_payload.rtmp_url }}"
-          TOKEN="${{ github.event.client_payload.alist_token }}"
-        else
-          # 来自网页手动的参数
-          VIDEO="${{ inputs.video_url }}"
-          RTMP="${{ inputs.rtmp_url }}"
-          TOKEN="${{ inputs.alist_token }}"
-        fi
-
         echo "---------------------------------------------------"
-        echo "🚀 启动推流任务"
-        echo "📡 视频源: $VIDEO"
-        echo "📺 推流至: TG 直播服务器"
+        echo "🚀 任务启动确认"
+        echo "📡 视频地址: $VIDEO_URL"
+        echo "📺 推流目标: RTMP Server"
         echo "---------------------------------------------------"
 
-        if [[ -z "$VIDEO" ]] || [[ -z "$RTMP" ]]; then
-          echo "❌ 错误: 视频地址或推流地址为空！"
+        if [[ -z "$VIDEO_URL" ]] || [[ -z "$RTMP_URL" ]]; then
+          echo "❌ 致命错误: 变量读取失败，地址为空！"
           exit 1
         fi
 
-        # --- 2. 构建 FFmpeg 命令 ---
-        # 使用 Bash 数组构建命令，安全处理带空格的参数和 Header
+        # 构建 FFmpeg 命令数组
         CMD=(ffmpeg -re)
-
-        # 网络稳定性参数
-        # -reconnect 1: 断线重连
-        # -reconnect_at_eof 1: 遇到 EOF 尝试重连 (防止过早结束)
-        # -reconnect_streamed 1: 针对流媒体重连
-        # -rw_timeout 15000000: 读写超时 15秒
+        
+        # 网络优化参数
         CMD+=(-reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 5)
         CMD+=(-rw_timeout 15000000)
         CMD+=(-user_agent "Mozilla/5.0")
 
-        # 鉴权 Headers (如果有 Token)
-        if [[ -n "$TOKEN" ]]; then
-           echo "🔑 已添加认证 Token"
-           CMD+=(-headers "Authorization: $TOKEN")
+        # 鉴权 Headers
+        if [[ -n "$ALIST_TOKEN" ]]; then
+           echo "🔑 检测到 Token，已注入 Headers"
+           CMD+=(-headers "Authorization: $ALIST_TOKEN")
         fi
 
-        # 输入配置
-        CMD+=(-i "$VIDEO")
-
-        # 输出配置
-        # -c:v copy: 视频流直接复制 (不转码，节省 CPU)
-        # -c:a aac: 音频转码为 aac (保证兼容性)
+        # 输入与输出
+        CMD+=(-i "$VIDEO_URL")
         CMD+=(-c:v copy -c:a aac -ar 44100 -b:a 128k -ac 2)
-        CMD+=(-f flv "$RTMP")
+        CMD+=(-f flv "$RTMP_URL")
 
-        # --- 3. 执行推流 ---
-        echo "▶️ 执行 FFmpeg..."
-        # "${CMD[@]}" 会正确展开数组中的参数
+        echo "▶️ 开始运行 FFmpeg..."
         "${CMD[@]}"

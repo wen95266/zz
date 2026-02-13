@@ -20,14 +20,21 @@ GITHUB_POOL = []
 
 if _multi_accounts_str:
     try:
-        items = _multi_accounts_str.split(',')
+        # 支持逗号或换行符分隔多个账号
+        items = _multi_accounts_str.replace('\n', ',').split(',')
         for item in items:
             item = item.strip()
+            if not item: continue
+            
             if '|' in item:
-                r, t = item.split('|', 1)
-                # 简单的格式验证
-                if "/" in r and len(t) > 10:
-                    GITHUB_POOL.append({"repo": r.strip(), "token": t.strip()})
+                parts = item.split('|')
+                # 兼容即使有多个 | 的情况，只取前两个
+                if len(parts) >= 2:
+                    repo = parts[0].strip()
+                    token = parts[1].strip()
+                    # 简单的格式验证
+                    if "/" in repo and len(token) > 5:
+                        GITHUB_POOL.append({"repo": repo, "token": token})
     except Exception as e:
         print(f"⚠️ 解析 GITHUB_ACCOUNTS_LIST 失败: {e}")
 
@@ -58,9 +65,9 @@ ALIST_TOKEN = os.getenv("ALIST_TOKEN")
 
 HOME_DIR = HOME
 
-# 主菜单布局 (已更新)
+# 主菜单布局
 MAIN_MENU = [
-    ["📂 文件", "📊 状态", "📥 任务"], # 新增 "文件" 入口
+    ["📂 文件", "📊 状态", "📥 任务"], 
     ["⬇️ 下载", "☁️ 隧道", "⚙️ 管理"],
     ["📺 推流设置", "📝 日志", "❓ 帮助"]
 ]
