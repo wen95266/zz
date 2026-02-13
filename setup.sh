@@ -33,6 +33,18 @@ echo -e "\033[1;36m>>> [2/5] 安装必要依赖...\033[0m"
 # ⚡️ 关键修改: 直接安装 alist 包 (Termux 官方源已收录，无需手动下载)
 pkg install -y python nodejs aria2 ffmpeg git vim curl wget tar openssl-tool build-essential libffi termux-tools ca-certificates alist
 
+# --- 修复 Termux DNS (解决 Cloudflared 无法解析的问题) ---
+# Cloudflared (Go程序) 在 Termux 下经常因为找不到 resolv.conf 而尝试连接 [::1]:53 导致报错
+RESOLV_CONF="$PREFIX/etc/resolv.conf"
+if [ ! -f "$RESOLV_CONF" ] || [ ! -s "$RESOLV_CONF" ]; then
+    echo "🔧 修复 DNS 配置 (创建 $RESOLV_CONF)..."
+    mkdir -p "$(dirname "$RESOLV_CONF")"
+    echo "nameserver 8.8.8.8" > "$RESOLV_CONF"
+    echo "nameserver 1.1.1.1" >> "$RESOLV_CONF"
+else
+    echo "✅ DNS 配置已存在"
+fi
+
 echo -e "\033[1;36m>>> [3/5] 安装 Python 库...\033[0m"
 # Termux 禁止使用 pip 升级自身，这里只安装依赖包
 if [ -f "bot/requirements.txt" ]; then

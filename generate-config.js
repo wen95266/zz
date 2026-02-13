@@ -40,9 +40,10 @@ if (!fs.existsSync(alistDataDir)) {
 
 // 3. 解析配置
 // ⚡️ 优化: 
-// 1. 使用 127.0.0.1 替代 localhost，防止 Termux 优先解析 IPv6 导致 502 Bad Gateway
-// 2. 添加 --protocol http2，修复 Termux 环境下 QUIC 协议连接不稳定的问题 (Error 530)
-let tunnelArgs = ['tunnel', '--url', 'http://127.0.0.1:5244', '--no-autoupdate', '--protocol', 'http2', '--metrics', '127.0.0.1:49500'];
+// 1. 使用 127.0.0.1 替代 localhost
+// 2. 添加 --protocol http2
+// 3. 添加 --edge-ip-version 4 (新): 强制 IPv4，提高移动网络兼容性
+let tunnelArgs = ['tunnel', '--url', 'http://127.0.0.1:5244', '--no-autoupdate', '--protocol', 'http2', '--edge-ip-version', '4', '--metrics', '127.0.0.1:49500'];
 
 const envPath = path.join(HOME, '.env');
 
@@ -68,8 +69,7 @@ try {
 
     if (mode === 'token' && token) {
       // Token 模式同样应用优化参数
-      // 注意: Cloudflared 对 Token 格式非常敏感，必须确保没有多余空格或引号
-      tunnelArgs = ['tunnel', 'run', '--token', token, '--protocol', 'http2', '--metrics', '127.0.0.1:49500'];
+      tunnelArgs = ['tunnel', 'run', '--token', token, '--protocol', 'http2', '--edge-ip-version', '4', '--metrics', '127.0.0.1:49500'];
       console.log(`ℹ️ 启用 Tunnel Token 模式 (Token 长度: ${token.length})`);
     } else {
         console.log(`ℹ️ 启用 Tunnel Quick 模式`);
@@ -117,6 +117,12 @@ const config = {
       autorestart: true,
       restart_delay: 5000,
       max_restarts: 10,
+      // ⚡️ 关键环境变量:
+      // GODEBUG=netdns=go: 强制 Go 使用内置 DNS 解析器 (读取 /etc/resolv.conf)，
+      // 而不是使用 Android 的 CGO 解析器 (在 Termux 下经常解析本地地址 [::1]:53 失败)
+      env: {
+        "GODEBUG": "netdns=go"
+      }
     }
   ]
 };

@@ -121,7 +121,7 @@ fi
 # --- 获取密码 ---
 if pm2 list | grep "alist" | grep -q "online"; then
     echo "-----------------------------------"
-    echo "🔑 获取 Alist 登录信息..."
+    echo "🔑 检查 Alist 登录状态..."
     
     # 优先检查是否存在预设密码文件
     if [ -f "$HOME/.alist_pass" ]; then
@@ -131,7 +131,13 @@ if pm2 list | grep "alist" | grep -q "online"; then
     else
         # 自动获取
         ADMIN_INFO=$("$HOME/bin/alist" admin --data "$DATA_DIR" 2>/dev/null)
-        if [ -n "$ADMIN_INFO" ]; then
+        
+        # 优化: 检查是否包含哈希存储的提示
+        if echo "$ADMIN_INFO" | grep -q "hash value"; then
+            echo "⚠️  管理员密码已初始化 (加密存储)。"
+            echo "💡 如果您忘记了密码，请运行以下命令设置新密码："
+            echo "👉 ./set_pass.sh 您的新密码"
+        elif [ -n "$ADMIN_INFO" ]; then
             echo "$ADMIN_INFO"
         else
             echo "⚠️ 无法自动获取密码，请尝试运行: ./set_pass.sh 123456"
