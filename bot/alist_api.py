@@ -4,6 +4,7 @@ import logging
 import json
 import re
 from .system import get_admin_pass
+from .config import ALIST_PASSWORD, ALIST_TOKEN
 
 logger = logging.getLogger(__name__)
 
@@ -13,45 +14,31 @@ _cached_token = None
 def get_token():
     """获取或刷新 Alist Token"""
     global _cached_token
+    
+    # 策略 0: 直接使用环境变量配置的 Token (最高优先级)
+    if ALIST_TOKEN:
+        return ALIST_TOKEN
+
     if _cached_token: return _cached_token
     
-    raw_output = get_admin_pass()
-    if not raw_output or "失败" in raw_output:
-        logger.error(f"无法获取 Alist 密码信息: {raw_output}")
-        return None
-
-    password = None
+    password = ALIST_PASSWORD
     
-    # 解析密码逻辑增强
-    # 策略1: 正则匹配常见输出格式 (admin: xxx 或 password: xxx)
-    # 使用 (.+) 匹配直到行尾，支持密码中包含空格或特殊字符
-    match = re.search(r'(?:admin|password):\s*(.+)', raw_output, re.IGNORECASE)
-    if match:
-        password = match.group(1).strip()
-    
-    # 策略2: 如果正则失败，尝试倒序查找最后一行有效内容
+    # 策略 1: 如果环境变量没配密码，尝试从系统/文件自动获取 (兼容旧模式)
     if not password:
-        lines = [l.strip() for l in raw_output.split('\n') if l.strip()]
-        # 过滤掉明显的日志行 (包含 time=, level=, [INFO] 等)
-        candidates = [
-            l for l in lines 
-            if "time=" not in l and "[INFO]" not in l and "level=" not in l
-        ]
-        if candidates:
-            last_line = candidates[-1]
-            # 如果包含冒号，可能是 "admin: 123"，尝试分割
-            if ":" in last_line:
-                parts = last_line.split(":", 1)
-                # 确保冒号后面有内容
+        raw_output = get_admin_pass()
+        if raw_output and "失败" not in raw_output:
+            # 尝试简单解析
+            if ":" in raw_output:
+                # 可能是 "admin: 123" 这种格式
+                parts = raw_output.split(":")
                 if len(parts) > 1:
-                    password = parts[1].strip()
-                else:
-                    password = last_line
-            else:
-                password = last_line
-
+                    password = parts[-1].strip()
+            if not password:
+                # 可能是纯密码
+                password = raw_output.strip()
+    
     if not password:
-        logger.error(f"解析 Alist 密码失败，原始输出: {raw_output[:100]}...")
+        logger.error("❌ 未配置 ALIST_PASSWORD 且无法自动获取密码，请在 ~/.env 中配置。")
         return None
 
     try:
@@ -79,7 +66,7 @@ def fetch_file_list(path="/", page=1, per_page=100):
     # 第一次尝试
     token = get_token()
     if not token: 
-        return None, "❌ 认证失败: 无法获取 Token。\n请检查:\n1. Alist 是否正在运行 (pm2 status)\n2. 密码是否正确 (尝试 ./set_pass.sh 重置)"
+        return None, "❌ 认证失败: 无法获取 Token。\n建议: 编辑 ~/.env 文件，直接填入 ALIST_PASSWORD=你的密码"
 
     url = f"{ALIST_API_URL}/api/fs/list"
     headers = {"Authorization": token}
@@ -98,8 +85,8 @@ def fetch_file_list(path="/", page=1, per_page=100):
         if data.get("code") == 200:
             return data["data"]["content"], None
             
-        # 如果是 401 或 Token 无效，尝试清除缓存重试一次
-        if data.get("code") in [401, 403]:
+        # 如果是 401 或 Token 无效，尝试清除缓存重试一次 (仅当没有硬编码 Token 时)
+        if data.get("code") in [401, 403] and not ALIST_TOKEN:
             logger.info("Token 可能失效，尝试重新获取...")
             _cached_token = None
             token = get_token()

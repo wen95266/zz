@@ -43,6 +43,11 @@ TUNNEL_MODE = os.getenv("TUNNEL_MODE", "quick")
 CLOUDFLARE_TOKEN = os.getenv("CLOUDFLARE_TOKEN")
 ALIST_DOMAIN = os.getenv("ALIST_DOMAIN")
 ARIA2_RPC_SECRET = os.getenv("ARIA2_RPC_SECRET")
+
+# Alist 认证配置 (新增)
+ALIST_PASSWORD = os.getenv("ALIST_PASSWORD")
+ALIST_TOKEN = os.getenv("ALIST_TOKEN")
+
 HOME_DIR = HOME
 
 # 主菜单布局 (已更新)

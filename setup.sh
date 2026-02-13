@@ -68,7 +68,7 @@ fi
 
 # 验证 Cloudflared 二进制
 echo "🧪 验证 Cloudflared 运行..."
-if "$CLOUDFLARED_BIN" --version > /dev/null 2>&1; then
+if "$CLOUDFLARED_BIN" --version > /dev/null; then
     echo "✅ Cloudflared 运行正常！"
 else
     echo "⚠️  Cloudflared 运行失败 (架构不匹配或文件损坏)"
@@ -123,6 +123,11 @@ if [ ! -f "$ENV_FILE" ]; then
 # ==============================
 BOT_TOKEN=
 ADMIN_ID=
+
+# 9. Alist 密码 (推荐配置)
+# 填入你的 Alist 密码，Bot 将直接使用此密码登录，无需自动抓取
+ALIST_PASSWORD=
+
 # 隧道模式: quick (随机域名) 或 token (固定域名)
 TUNNEL_MODE=quick
 CLOUDFLARE_TOKEN=
