@@ -26,11 +26,14 @@ try {
 console.log(`ℹ️ Python 路径: ${pythonExec}`);
 
 // 2. 检测 termux-chroot (解决 DNS 问题的关键)
+let termuxChrootPath = "";
 let useProot = false;
 try {
-  execSync("command -v termux-chroot");
-  useProot = true;
-  console.log("ℹ️ 检测到 Termux 环境: 将启用 termux-chroot 修复 Cloudflared DNS");
+  termuxChrootPath = execSync("command -v termux-chroot").toString().trim();
+  if (termuxChrootPath) {
+      useProot = true;
+      console.log(`ℹ️ 检测到 Termux 环境: 将启用 termux-chroot (${termuxChrootPath})`);
+  }
 } catch (e) {
   console.log("ℹ️ 未检测到 termux-chroot，将直接运行");
 }
@@ -86,6 +89,7 @@ const cloudflaredApp = {
     name: "tunnel",
     script: path.join(HOME, "bin/cloudflared"),
     args: tunnelArgs,
+    interpreter: "none", // ⚡️ 关键修改: 告诉 PM2 这是一个二进制文件，不要用 Node 执行
     autorestart: true,
     restart_delay: 5000,
     max_restarts: 10
@@ -93,7 +97,8 @@ const cloudflaredApp = {
 
 // 如果在 Termux 下，使用 termux-chroot 启动
 if (useProot) {
-    cloudflaredApp.script = "termux-chroot";
+    cloudflaredApp.script = termuxChrootPath; // 使用找到的完整路径
+    cloudflaredApp.interpreter = "bash";      // ⚡️ 关键修改: termux-chroot 是 Shell 脚本，使用 Bash 执行
     // 注意: args 的第一个参数必须是实际执行的二进制路径
     cloudflaredApp.args = [path.join(HOME, "bin/cloudflared"), ...tunnelArgs];
 }
@@ -106,6 +111,7 @@ const config = {
       script: path.join(HOME, "bin/alist"),
       args: ["server", "--data", alistDataDir],
       cwd: alistDataDir,
+      interpreter: "none", // Alist 也是二进制
       autorestart: true,
       restart_delay: 5000,
       max_restarts: 10,
@@ -114,6 +120,7 @@ const config = {
       name: "aria2",
       script: "aria2c",
       args: [`--conf-path=${path.join(HOME, ".aria2/aria2.conf")}`],
+      interpreter: "none", // Aria2 也是二进制
       autorestart: true,
       restart_delay: 5000,
     },
@@ -122,6 +129,7 @@ const config = {
       script: pythonExec,
       args: ["-u", "-m", "bot.main"],
       cwd: __dirname,
+      interpreter: "none", // Python 解释器通常作为 script 传入，这里设为 none 以防万一，但 PM2 对 python 处理较好
       autorestart: true,
       restart_delay: 3000,
       env: {
