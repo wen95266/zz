@@ -98,7 +98,7 @@ if pm2 list | grep "alist" | grep -q "online"; then
         echo "✅ 本地连接成功！Alist 正在运行。"
     else
         echo "⚠️  注意: Alist 进程在运行，但无法通过 127.0.0.1 连接。"
-        echo "   这可能是 Cloudflare 报错 1033 的原因。"
+        echo "   这可能是 Cloudflare 报错 1033/530 的原因。"
     fi
 else
     echo "❌ Alist 启动失败！"
@@ -110,9 +110,9 @@ if pm2 list | grep "tunnel" | grep -q "online"; then
     echo "✅ Cloudflared Tunnel 启动成功"
     echo "🔎 正在获取公网链接 (请稍候)..."
     
-    # 尝试循环 10 秒获取 URL
+    # 尝试循环 15 秒获取 URL
     TUNNEL_URL=""
-    for i in {1..10}; do
+    for i in {1..15}; do
         # 从日志读取 trycloudflare 链接
         LOGS=$(pm2 logs tunnel --lines 50 --nostream 2>&1)
         URL=$(echo "$LOGS" | grep -o 'https://[-a-zA-Z0-9]*\.trycloudflare\.com' | tail -n 1)
@@ -128,8 +128,10 @@ if pm2 list | grep "tunnel" | grep -q "online"; then
         echo -e "\033[1;32m🎉 您的公网访问地址: \033[0m"
         echo -e "\033[1;32m$TUNNEL_URL\033[0m"
         echo "--------------------------------------------------------"
+        echo "👉 请在 Telegram Bot 中点击「☁️ 隧道」确认链接是否更新。"
     else
-        echo "⚠️  暂未获取到链接，请稍后在 Bot 中点击「☁️ 隧道」查看。"
+        echo "⚠️  暂未获取到链接。这可能是因为网络较慢。"
+        echo "👉 请稍后在 Bot 中点击「☁️ 隧道」查看。"
     fi
 
 else

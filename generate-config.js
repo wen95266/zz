@@ -50,12 +50,12 @@ if (!fs.existsSync(alistDataDir)) {
 }
 
 // 4. 定义 Tunnel 参数 (强制 Quick Tunnel)
-// --url http://127.0.0.1:5244 告诉 Cloudflared 创建一个随机公网 URL 指向本地端口
+// 优化: 使用 localhost，并设置为 auto 协议
 const tunnelArgs = [
     'tunnel', 
-    '--url', 'http://127.0.0.1:5244', 
+    '--url', 'http://localhost:5244', 
     '--no-autoupdate', 
-    '--protocol', 'http2', 
+    '--protocol', 'auto', 
     '--edge-ip-version', '4', 
     '--metrics', '127.0.0.1:49500'
 ];
@@ -88,12 +88,11 @@ const cloudflaredApp = {
 
 // 如果在 Termux 下，使用 termux-chroot 启动
 if (useProot) {
-    // Alist
-    alistApp.script = termuxChrootPath;
-    alistApp.interpreter = "bash";
-    alistApp.args = [path.join(HOME, "bin/alist"), "server", "--data", alistDataDir];
-
-    // Tunnel
+    // ⚠️ 关键修复: 
+    // Alist 保持在原生环境运行，不使用 termux-chroot。
+    // 这样它能正确绑定到 0.0.0.0/localhost，避免 proot 网络隔离导致的连接拒绝 (Error 1033/530)。
+    
+    // Cloudflared 必须使用 termux-chroot，否则无法解析 DNS 连接 Cloudflare 边缘节点。
     cloudflaredApp.script = termuxChrootPath;
     cloudflaredApp.interpreter = "bash";
     cloudflaredApp.args = [path.join(HOME, "bin/cloudflared"), ...tunnelArgs];
