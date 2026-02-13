@@ -25,9 +25,17 @@ if _multi_accounts_str:
             item = item.strip()
             if '|' in item:
                 r, t = item.split('|', 1)
-                GITHUB_POOL.append({"repo": r.strip(), "token": t.strip()})
+                # 简单的格式验证
+                if "/" in r and len(t) > 10:
+                    GITHUB_POOL.append({"repo": r.strip(), "token": t.strip()})
     except Exception as e:
         print(f"⚠️ 解析 GITHUB_ACCOUNTS_LIST 失败: {e}")
+
+_account_count = len(GITHUB_POOL)
+if _account_count > 0:
+    print(f"✅ 已加载 {_account_count} 个 GitHub 推流账号")
+else:
+    print("⚠️ 未配置 GitHub 推流账号 (GITHUB_ACCOUNTS_LIST 为空)")
 
 _account_cycle = itertools.cycle(GITHUB_POOL) if GITHUB_POOL else None
 

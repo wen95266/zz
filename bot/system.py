@@ -7,7 +7,7 @@ import requests
 import json
 import logging
 import socket
-from .config import HOME_DIR, TUNNEL_MODE, ARIA2_RPC_SECRET, ALIST_DOMAIN
+from .config import HOME_DIR, TUNNEL_MODE, ARIA2_RPC_SECRET, ALIST_DOMAIN, get_account_count
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +99,13 @@ def get_system_stats():
     msg += f"\n\n🔥 CPU: `{cpu}%`"
     msg += f"\n🧠 RAM: `{ram}%`"
     msg += f"\n💾 Disk: `{disk_str}`"
+    
+    # 新增: GitHub 账号池状态显示
+    gh_count = get_account_count()
+    if gh_count > 0:
+        msg += f"\n☁️ GitHub Pool: `{gh_count}` (就绪)"
+    else:
+        msg += "\n⚠️ GitHub: `未配置` (无法推流)"
     
     if disk_percent > 90:
         msg += "\n⚠️ *警告: 磁盘空间即将耗尽！*"

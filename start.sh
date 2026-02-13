@@ -17,6 +17,7 @@ if [ -f "$ENV_FILE" ]; then
     
     # 使用 grep 和 cut 安全提取 BOT_TOKEN (去除引号和回车符)
     BOT_TOKEN=$(grep -E "^BOT_TOKEN=" "$ENV_FILE" | head -n 1 | cut -d '=' -f 2- | tr -d '"' | tr -d "'" | tr -d '\r')
+    TUNNEL_MODE=$(grep -E "^TUNNEL_MODE=" "$ENV_FILE" | head -n 1 | cut -d '=' -f 2- | tr -d '"' | tr -d "'" | tr -d '\r')
 else
     echo "❌ 未找到 ~/.env 文件，请先运行 ./setup.sh"
     exit 1
@@ -101,7 +102,17 @@ sleep 5
 
 # --- Alist 检查 ---
 if pm2 list | grep "alist" | grep -q "online"; then
-    echo "✅ Alist 启动成功"
+    echo "✅ Alist 进程已启动"
+    
+    # ⚡️ 新增: 深度连接检查 (解决 Error 1033 诊断问题)
+    echo "🔍 正在测试本地连接 (http://127.0.0.1:5244)..."
+    if curl --connect-timeout 3 -s -I http://127.0.0.1:5244 > /dev/null; then
+        echo "✅ 本地连接成功！Alist 正在运行。"
+    else
+        echo "⚠️  注意: Alist 进程在运行，但无法通过 127.0.0.1 连接。"
+        echo "   这可能是 Cloudflare 报错 1033 的原因。"
+        echo "   尝试重启: ./start.sh"
+    fi
 else
     echo "❌ Alist 启动失败！"
     echo "📋 Alist 日志:"
@@ -111,6 +122,17 @@ fi
 # --- Tunnel 检查 ---
 if pm2 list | grep "tunnel" | grep -q "online"; then
     echo "✅ Cloudflared Tunnel 启动成功"
+    
+    # 针对 Token 模式用户的特别提示
+    if [[ "$TUNNEL_MODE" == "token" ]]; then
+        echo "-----------------------------------"
+        echo "📢 Cloudflare 后台配置指南 (解决 Error 1033):"
+        echo "请确保在 Cloudflare Zero Trust 面板 -> Public Hostname 设置如下:"
+        echo "1. Service Type (协议): HTTP"
+        echo "2. URL (地址): 127.0.0.1:5244"
+        echo "⚠️  不要填 localhost，必须填 127.0.0.1"
+        echo "-----------------------------------"
+    fi
 else
     echo "❌ Cloudflared Tunnel 启动失败！"
     echo "📋 Tunnel 日志:"
@@ -147,5 +169,5 @@ fi
 
 echo "-----------------------------------"
 echo "🚀 服务检查完成"
-echo "👉 如果推流失败 (Error 530)，请检查 Tunnel 日志。"
+echo "👉 如果推流失败或打不开网页，请检查上方日志。"
 echo "-----------------------------------"
