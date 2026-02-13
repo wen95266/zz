@@ -117,11 +117,10 @@ def get_single_usage(repo, token):
             return True, {"used": used, "limit": limit}
         elif r.status_code == 403:
             return False, "权限不足 (缺少 user 权限)"
-        elif r.status_code == 404:
-            # 细粒度 Token (Fine-grained) 不支持读取 Billing，或者是非 Admin 读取 Org
-            return False, "无权读取账单 (404)"
-        elif r.status_code == 410:
-            return False, "权限不足 (410: 请检查Token Scope)"
+        elif r.status_code == 404 or r.status_code == 410:
+            # 404/410: Fine-grained Token 不支持 Billing，或者 API 对该类型账号不可用
+            # 这不代表 Token 无法用于推流，因此标记为成功但 limit=-1
+            return True, {"used": 0, "limit": -1}
         else:
             return False, f"HTTP {r.status_code}"
     except Exception as e:
@@ -142,15 +141,19 @@ def get_all_usage_stats():
         safe_name = escape_text(user)
         
         if success:
-            percent = 0
-            if info['limit'] > 0:
-                percent = round((info['used'] / info['limit']) * 100, 1)
-            
-            icon = "🟢"
-            if percent > 80: icon = "🟡"
-            if percent > 95: icon = "🔴"
-            
-            results.append(f"{icon} *{safe_name}*: `{info['used']}` / `{info['limit']}` ({percent}%)")
+            if info.get('limit') == -1:
+                # 无法获取额度的情况 (Fine-grained token 等)
+                results.append(f"🟢 *{safe_name}*: `额度未知` (API受限)")
+            else:
+                percent = 0
+                if info['limit'] > 0:
+                    percent = round((info['used'] / info['limit']) * 100, 1)
+                
+                icon = "🟢"
+                if percent > 80: icon = "🟡"
+                if percent > 95: icon = "🔴"
+                
+                results.append(f"{icon} *{safe_name}*: `{info['used']}` / `{info['limit']}` ({percent}%)")
         else:
             # 错误信息必须转义，否则包含 _ 等字符会报错
             safe_info = escape_text(info)
