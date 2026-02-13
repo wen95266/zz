@@ -1,3 +1,4 @@
+
 import os
 import subprocess
 import psutil
@@ -119,8 +120,19 @@ def get_admin_pass():
         # 指定数据目录查询密码
         data_dir = os.path.join(HOME_DIR, "alist-data")
         cmd = [os.path.join(HOME_DIR, "bin", "alist"), "admin", "--data", data_dir]
-        return subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode('utf-8').strip()
-    except Exception as e: return f"获取失败: {str(e)}"
+        
+        # 增加超时限制，防止卡死
+        output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, timeout=10).decode('utf-8').strip()
+        
+        # ⚠️ 关键修复: 去除 ANSI 颜色代码 (Termux 环境常见)
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+        clean_output = ansi_escape.sub('', output)
+        
+        return clean_output
+    except subprocess.TimeoutExpired:
+        return "获取失败: 命令超时"
+    except Exception as e: 
+        return f"获取失败: {str(e)}"
 
 # --- Aria2 相关 ---
 

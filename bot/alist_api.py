@@ -21,14 +21,20 @@ def get_token():
         return None
 
     # 解析密码
-    # `alist admin` 输出通常为 "admin: 123456" 或直接是密码
-    # 我们优先匹配 "admin: <password>" 格式
+    # `alist admin` 输出通常为 "admin: 123456"
     password = raw_output.strip()
-    match = re.search(r'admin:\s*(.+)', raw_output)
+    
+    # 尝试匹配 "admin: xxxxx"
+    match = re.search(r'admin:\s*(\S+)', raw_output)
     if match:
         password = match.group(1).strip()
-    
-    # 简单的非空检查
+    else:
+        # 如果没有 admin: 前缀，尝试取最后一行非空内容 (兜底策略)
+        lines = [l.strip() for l in raw_output.split('\n') if l.strip()]
+        if lines:
+            # 假设最后一行是密码
+            password = lines[-1]
+
     if not password:
         logger.error("解析 Alist 密码为空")
         return None
@@ -45,7 +51,8 @@ def get_token():
             _cached_token = data["data"]["token"]
             return _cached_token
         else:
-            logger.error(f"Alist 登录失败: {data} (User: admin, PassLen: {len(password)})")
+            # 记录更详细的错误，方便排查
+            logger.error(f"Alist 登录失败: {data}")
             return None
     except Exception as e:
         logger.error(f"Alist API 连接失败: {e}")
@@ -58,7 +65,7 @@ def fetch_file_list(path="/", page=1, per_page=100):
     # 第一次尝试
     token = get_token()
     if not token: 
-        return None, "无法连接 Alist 或密码错误。\n请尝试运行 `./set_pass.sh 123456` 重置密码。"
+        return None, "无法连接 Alist 或密码错误。\n请尝试运行 `./set_pass.sh 您的密码` 并确保 Alist 正在运行。"
 
     url = f"{ALIST_API_URL}/api/fs/list"
     headers = {"Authorization": token}
