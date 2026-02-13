@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 
 # ==========================================
-# Termux Alist Bot 部署脚本 (修复版)
+# Termux Alist Bot 部署脚本 (自动换源版)
 # ==========================================
 set -e
 
@@ -59,6 +59,7 @@ echo -e "\033[1;36m>>> [5/5] 下载核心组件 ($ARCH)...\033[0m"
 CLOUDFLARED_BIN="$HOME/bin/cloudflared"
 if [ ! -f "$CLOUDFLARED_BIN" ]; then
     echo "⬇️ 正在下载 Cloudflared..."
+    # Cloudflare 一般较稳定，暂不配置多源
     wget -O "$CLOUDFLARED_BIN" "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-${CF_ARCH}"
     chmod +x "$CLOUDFLARED_BIN"
     echo "✅ Cloudflared 安装完成"
@@ -66,42 +67,74 @@ else
     echo "✅ Cloudflared 已存在 ($CLOUDFLARED_BIN)"
 fi
 
-# --- 2. 安装/修复 Alist ---
+# --- 2. 安装/修复 Alist (自动换源逻辑) ---
 ALIST_BIN="$HOME/bin/alist"
+STABLE_VERSION="v3.41.0"
+ALIST_FILE="alist.tar.gz"
 
-# 强制停止现有进程以避免文件占用
+# 强制停止现有进程
 pm2 stop alist >/dev/null 2>&1 || true
 
-echo "⬇️ 正在安装/修复 Alist (稳定版)..."
+# 定义下载源数组
+MIRRORS=(
+    "https://github.com/alist-org/alist/releases/download/${STABLE_VERSION}/alist-${ALIST_ARCH}.tar.gz"
+    "https://mirror.ghproxy.com/https://github.com/alist-org/alist/releases/download/${STABLE_VERSION}/alist-${ALIST_ARCH}.tar.gz"
+    "https://ghproxy.net/https://github.com/alist-org/alist/releases/download/${STABLE_VERSION}/alist-${ALIST_ARCH}.tar.gz"
+)
 
-# 强制指定一个极其稳定的版本，避免 Latest 获取到 beta 或 buggy 版本
-# v3.41.0 是公认的稳定版本
-STABLE_VERSION="v3.41.0"
-DOWNLOAD_URL="https://github.com/alist-org/alist/releases/download/${STABLE_VERSION}/alist-${ALIST_ARCH}.tar.gz"
+echo "⬇️ 正在安装/修复 Alist (目标版本: $STABLE_VERSION)..."
+echo "ℹ️ 将尝试自动切换下载源，直到下载成功。"
 
-echo "目标版本: $STABLE_VERSION"
-echo "下载地址: $DOWNLOAD_URL"
+DOWNLOAD_SUCCESS=false
 
-# 删除旧文件，确保纯净安装
-rm -f "$ALIST_BIN" alist.tar.gz alist
-
-if wget -O alist.tar.gz "$DOWNLOAD_URL"; then
-    echo "📦 解压中..."
-    tar -zxvf alist.tar.gz
-    chmod +x alist
-    mv alist "$ALIST_BIN"
-    rm -f alist.tar.gz
+for URL in "${MIRRORS[@]}"; do
+    echo "------------------------------------------------"
+    echo "🌐 尝试源: $URL"
     
-    # 立即验证文件是否完好
-    if "$ALIST_BIN" version > /dev/null 2>&1; then
-        echo "✅ Alist 已成功更新至 $STABLE_VERSION"
+    # 清理旧文件
+    rm -f "$ALIST_BIN" "$ALIST_FILE" alist
+
+    # 尝试下载 (超时设置为 15秒)
+    if wget --timeout=15 -O "$ALIST_FILE" "$URL"; then
+        echo "📦 下载完成，正在校验..."
+        
+        # 1. 检查是不是压缩包 (防止下载到报错的 HTML 页面)
+        if ! file "$ALIST_FILE" | grep -q "gzip compressed data"; then
+            echo "⚠️  文件校验失败: 下载的不是有效的 tar.gz 包 (可能是网络拦截)"
+            continue
+        fi
+
+        # 2. 尝试解压
+        if tar -zxvf "$ALIST_FILE"; then
+            chmod +x alist
+            mv alist "$ALIST_BIN"
+            rm -f "$ALIST_FILE"
+
+            # 3. 运行测试
+            echo "🧪 验证二进制文件..."
+            if "$ALIST_BIN" version > /dev/null 2>&1; then
+                echo "✅ Alist 安装成功！"
+                DOWNLOAD_SUCCESS=true
+                break # 成功则跳出循环
+            else
+                echo "⚠️  二进制运行失败 (架构不匹配或文件损坏)"
+            fi
+        else
+            echo "⚠️  解压失败，文件可能已损坏"
+        fi
     else
-        echo "❌ Alist 文件似乎损坏，请尝试切换网络后重新运行 setup.sh"
-        rm -f "$ALIST_BIN"
-        exit 1
+        echo "⚠️  下载连接超时或失败"
     fi
-else
-    echo "❌ 下载失败，请检查网络连接 (可能需要魔法)"
+done
+
+if [ "$DOWNLOAD_SUCCESS" = false ]; then
+    echo "------------------------------------------------"
+    echo "❌ 所有源均下载失败！"
+    echo "💡 请尝试："
+    echo "1. 开启 VPN/代理"
+    echo "2. 检查网络连接"
+    echo "3. 稍后重试"
+    echo "------------------------------------------------"
     exit 1
 fi
 
@@ -160,8 +193,6 @@ chmod +x start.sh update.sh monitor.sh
 echo "--------------------------------------------------------"
 echo "✅ Termux 环境部署完成！"
 echo "--------------------------------------------------------"
-echo "⚠️  注意: 已强制修复 Alist。"
-echo "--------------------------------------------------------"
-echo "👉 1. 请先运行: ./setup.sh (确保下载成功)"
+echo "👉 1. 请先运行: ./setup.sh (确保 Alist 下载无误)"
 echo "👉 2. 然后运行: ./start.sh"
 echo "--------------------------------------------------------"
