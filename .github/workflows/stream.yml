@@ -113,13 +113,6 @@ jobs:
                         if not is_image and name.endswith(('.mp3', '.flac', '.wav', '.m4a', '.aac', '.ogg')): valid = True
                         
                         if valid:
-                            # Construct Raw URL
-                            # Alist raw_url might be relative or absolute (CDN)
-                            # We construct a /d/ link for safety or use raw_url API result? 
-                            # Using /d/ is safer for batch construction without querying every file
-                            # But we need signature. Let's use the list item's sign if available, strictly we don't have sign in list.
-                            # We will use /d/ path + token.
-                            
                             encoded_path = urllib.parse.quote(f"{path}/{item['name']}")
                             f_url = f"{base_url}/d{encoded_path}"
                             if token: f_url += f"?token={token}"
@@ -140,10 +133,6 @@ jobs:
         if not audio_urls:
             exit(1)
 
-        # Shuffle audio for radio feel? No, keep order for now, or maybe shuffle.
-        # Let's shuffle to make it more like a radio.
-        # random.shuffle(audio_urls)
-
         with open("audio_list.txt", "w") as f:
             for url in audio_urls:
                 f.write(f"file '{url}'\n")
@@ -153,13 +142,9 @@ jobs:
         print(f"🖼 Found {len(image_urls)} image files.")
 
         if not image_urls:
-            # Fallback to a black screen or placeholder if no image found?
-            # Generate a solid color image
             os.system("ffmpeg -f lavfi -i color=c=black:s=1280x720:d=1 -frames:v 1 default.jpg")
             image_urls = ["default.jpg"]
         else:
-            # Download images locally for stability (images are small)
-            # Using remote images in concat can be laggy
             local_images = []
             if not os.path.exists("downloaded_images"): os.makedirs("downloaded_images")
             
@@ -168,18 +153,14 @@ jobs:
                     ext = url.split('?')[0].split('.')[-1]
                     if len(ext) > 4: ext = "jpg"
                     local_path = f"downloaded_images/img_{idx}.{ext}"
-                    # Use curl to download
                     os.system(f"curl -L -s -o '{local_path}' '{url}'")
                     local_images.append(local_path)
                 except: pass
             
-            # Generate slideshow list
-            # Duration 15 seconds per image
             with open("image_list.txt", "w") as f:
                 for img in local_images:
                     f.write(f"file '{img}'\n")
                     f.write("duration 15\n")
-                # Repeat last image to prevent EOF glitch
                 if local_images:
                     f.write(f"file '{local_images[-1]}'\n")
 
@@ -192,16 +173,11 @@ jobs:
       run: |
         echo "📻 Starting Radio Stream..."
         
-        # FFmpeg Command for Radio
-        # 1. -stream_loop -1: 让图片列表无限循环播放，确保视频流不会比音频流先结束
-        # 2. -shortest: 当音频流结束时停止推流 (否则会无限循环)
-        # 3. -max_muxing_queue_size 4096: 防止音视频处理速度不匹配导致队列溢出 (Exit 187 常见原因)
-        
         ffmpeg -re \
         -stream_loop -1 -f concat -safe 0 -i image_list.txt \
         -f concat -safe 0 -protocol_whitelist file,http,https,tcp,tls -i audio_list.txt \
         -map 0:v -map 1:a \
-        -c:v libx264 -preset veryfast -tune stillimage \
+        -c:v libx264 -preset ultrafast -tune stillimage \
         -vf "scale=1280:-2,setsar=1,format=yuv420p" -g 60 -keyint_min 60 \
         -c:a aac -b:a 192k -ar 44100 \
         -max_muxing_queue_size 4096 \
@@ -211,7 +187,6 @@ jobs:
     - name: Start Streaming (Standard Video Mode)
       if: ${{ (github.event.client_payload.mode != 'radio') && (inputs.mode != 'radio') }}
       env:
-        # ⚡️ 核心修复: 使用 GitHub 表达式 (||) 处理变量
         VIDEO_URL: ${{ github.event.client_payload.video_url || inputs.video_url }}
         RTMP_URL: ${{ github.event.client_payload.rtmp_url || inputs.rtmp_url }}
       run: |
@@ -225,6 +200,11 @@ jobs:
           exit 1
         fi
 
+        # ⚡️ 优化: 针对 GitHub Runner 资源限制进行调优
+        # 1. 降低分辨率: 限制最大宽度 1280 (720p)，防止高清视频导致 CPU 跑满 (speed < 1x)
+        # 2. 提升速度: preset ultrafast
+        # 3. 降低码率: 限制为 4500k，减轻编码压力和带宽波动
+
         CMD=(ffmpeg -re)
         CMD+=(-reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_on_http_error 4xx,5xx -reconnect_delay_max 30)
         CMD+=(-protocol_whitelist file,http,https,tcp,tls,crypto)
@@ -232,9 +212,9 @@ jobs:
         CMD+=(-user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
         CMD+=(-i "$VIDEO_URL")
         CMD+=(-c:v libx264)
-        CMD+=(-preset veryfast -tune zerolatency)
-        CMD+=(-vf "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1")
-        CMD+=(-crf 24 -maxrate 8000k -bufsize 16000k)
+        CMD+=(-preset ultrafast -tune zerolatency)
+        CMD+=(-vf "scale='min(1280,iw)':-2,setsar=1")
+        CMD+=(-crf 26 -maxrate 4500k -bufsize 9000k)
         CMD+=(-pix_fmt yuv420p -g 60)
         CMD+=(-c:a aac -ar 44100 -b:a 128k -ac 2)
         CMD+=(-max_muxing_queue_size 4096)
